@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 
-IMAGE_PATH = './dataset/img_0095_jpeg.jpg'
+IMAGE_PATH = './dataset/img_0171_jpeg.jpg'
 RESHAPE_LEVEL = 20  # -50 ใหญ่ขึ้น, 0 ปกติ, +50 เล็กลง
 OUTPUT_PATH = './result_arms_linear.jpg'
 CALCULATION_REPORT_PATH = './linear_calculation.txt'
