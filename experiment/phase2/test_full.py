@@ -22,7 +22,7 @@ import mediapipe as mp
 # ============================================================
 # 1. ตั้งค่า
 # ============================================================
-IMAGE_PATH = './dataset/img_0221_jpeg.jpg'
+IMAGE_PATH = './dataset/img_0283_jpeg.jpg'
 
 UPPER_RADIUS = 22        # รัศมีต้นแขน (px)
 LOWER_RADIUS = 18        # รัศมีปลายแขน (px)
