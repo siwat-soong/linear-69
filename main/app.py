@@ -48,6 +48,7 @@ from utils.mask.chest import validate_chest, create_chest_mask, chest_adjust
 from utils.mask.waist import validate_waist, create_waist_mask, waist_adjust
 from utils.mask.hips import validate_hips, create_hips_mask, hips_adjust
 from utils.mask.arm_for_ui import validate_arm, create_arm_mask, arm_adjust
+from utils.mask.leg_for_ui import validate_leg, create_leg_mask, leg_adjust
 
 WARP_CACHE = {}
 
@@ -65,7 +66,8 @@ VALIDATORS = {
     "chest": validate_chest,
     "waist": validate_waist,
     "hips": validate_hips,
-    "arm": validate_arm
+    "arm": validate_arm,
+    "leg": validate_leg
 }
 
 # =====================================================================
@@ -520,6 +522,67 @@ async def arm_adjust_endpoint(image: UploadFile = File(...), scale: float = Form
 
     except Exception as e:
         print(f"Error in /arm: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/leg/mask")
+async def leg_mask_endpoint(image: UploadFile = File(...)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_leg"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        M_leg_display, leg_cache_data = create_leg_mask(matrix)
+
+        if leg_cache_data is None:
+            raise ValueError("ไม่พบขาในภาพเพื่อทำ Mask")
+
+        WARP_CACHE[cache_key] = leg_cache_data
+
+        success, encoded_mask = cv2.imencode('.png', M_leg_display)
+        if not success:
+            raise ValueError("Failed to encode mask image")
+
+        return Response(content=encoded_mask.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /leg/mask: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/leg")
+async def leg_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_leg"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if matrix is None:
+            raise ValueError("ไม่สามารถอ่านข้อมูลรูปภาพได้")
+
+        if cache_key in WARP_CACHE:
+            leg_cache_data = WARP_CACHE[cache_key]
+        else:
+            _, leg_cache_data = create_leg_mask(matrix)
+            if leg_cache_data is not None:
+                WARP_CACHE[cache_key] = leg_cache_data
+            else:
+                raise ValueError("ยังไม่ได้ทำ Mask หรือหาขาไม่พบ")
+
+        result_matrix = leg_adjust(matrix, leg_cache_data, scale_val=scale)
+
+        success, encoded_img = cv2.imencode('.png', result_matrix)
+        if not success:
+            raise ValueError("Failed to encode image")
+
+        return Response(content=encoded_img.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /leg: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 if __name__ == "__main__":
