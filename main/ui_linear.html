@@ -826,16 +826,24 @@ async function callReshapeApi(toolName, scaleAmount){
     // 💡 บันทึก State ใหม่ลง History หลังจากการยิง API สำเร็จ
     pushHistoryState();
 
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        hideLoading();
+      });
+    });
+
   } catch(err) {
     if(err.name !== 'AbortError'){
       console.error(`Error calling api/${toolName}:`, err);
       alert(`⚠️ ${err.message}`);
     }
   } finally {
-    isProcessing = false;
-    updateStepButtons();
-    updateUndoRedoButtons();
-    hideLoading();
+    if (!activeAbortController || !activeAbortController.signal.aborted) {
+      isProcessing = false;
+      updateStepButtons();
+      updateUndoRedoButtons();
+      hideLoading();
+    }
   }
 }
 
