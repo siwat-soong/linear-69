@@ -150,19 +150,46 @@ button,input{font:inherit}
 }
 
 /* ===== Step Control Buttons ===== */
-.step-control{
-  display:flex;align-items:center;justify-content:center;gap:16px;
-  margin:12px 0;
+.step-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 12px 0;
 }
-.btn-step{
-  width:44px;height:44px;border-radius:50%;border:0;
-  background:var(--surface2);color:var(--brown);
-  font-size:22px;font-weight:700;cursor:pointer;transition:.18s ease;
-  display:flex;align-items:center;justify-content:center;user-select:none;
+
+.btn-step {
+  min-width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  border: 0;
+  background: var(--surface2);
+  color: var(--brown);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: .18s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  padding: 0 6px;
 }
-.btn-step:hover:not(:disabled){background:var(--orange);color:var(--brown);transform:translateY(-1px)}
-.btn-step:active:not(:disabled){transform:scale(.95)}
-.btn-step:disabled{opacity:.35;cursor:not-allowed}
+
+.btn-step:hover:not(:disabled) {
+  background: var(--orange);
+  color: var(--brown);
+  transform: translateY(-1px);
+}
+
+.btn-step:active:not(:disabled) {
+  transform: scale(.95);
+}
+
+.btn-step:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
 
 .divider{height:1px;background:#EEE2D4;margin:20px 0}
 .panel-actions{display:grid;gap:10px}
@@ -199,8 +226,19 @@ button,input{font:inherit}
   .panel-head,.control-label{display:contents}
   .panel h3,.control-label>span:first-child,.divider,.note,.project-name{display:none}
   .selected-tool{grid-column:1;min-width:54px;text-align:center;padding:6px 10px;font-size:12px}
-  .step-control{grid-column:2;margin:0;gap:12px;justify-content:center}
-  .btn-step{width:36px;height:36px;font-size:18px}
+  .step-control {
+    grid-column: 2;
+    margin: 0;
+    gap: 4px;
+    justify-content: center;
+  }
+  .btn-step {
+    min-width: 32px;
+    height: 32px;
+    font-size: 12px;
+    padding: 0 4px;
+    border-radius: 8px;
+  }
   .value-pill{min-width:42px;padding:5px 6px}
   .panel-actions{grid-column:1/-1;grid-template-columns:repeat(3,1fr);gap:8px}
   .panel-actions .btn{min-height:38px;padding:0 6px;font-size:12.5px;white-space:nowrap}
@@ -260,11 +298,12 @@ button,input{font:inherit}
       <span>Scale</span>
     </div>
 
-    <!-- เปลี่ยนจาก Slider เป็น ปุ่มกด Step Control (- / +) -->
     <div class="step-control">
-      <button type="button" class="btn-step" id="btnDecrease" disabled>-</button>
+      <button type="button" class="btn-step" id="btnDec5" disabled>-5</button>
+      <button type="button" class="btn-step" id="btnDec1" disabled>-1</button>
       <span class="value-pill" id="scaleValue">0</span>
-      <button type="button" class="btn-step" id="btnIncrease" disabled>+</button>
+      <button type="button" class="btn-step" id="btnInc1" disabled>+1</button>
+      <button type="button" class="btn-step" id="btnInc5" disabled>+5</button>
     </div>
 
     <div class="divider"></div>
@@ -339,8 +378,10 @@ const changeBtn = document.getElementById('changeBtn');
 const dropZone = document.getElementById('dropZone');
 
 // Element ปุ่มกด Step
-const btnDecrease = document.getElementById('btnDecrease');
-const btnIncrease = document.getElementById('btnIncrease');
+const btnDec5 = document.getElementById('btnDec5');
+const btnDec1 = document.getElementById('btnDec1');
+const btnInc1 = document.getElementById('btnInc1');
+const btnInc5 = document.getElementById('btnInc5');
 const scaleValue = document.getElementById('scaleValue');
 
 const selectedTool = document.getElementById('selectedTool');
@@ -398,8 +439,12 @@ function updateStepButtons(){
   const val = reshapeState[activeTool] ?? 0;
   scaleValue.textContent = val > 0 ? `+${val}` : `${val}`;
   const enabled = sourceImage !== null;
-  btnDecrease.disabled = !enabled || isProcessing || (val <= MIN_SCALE);
-  btnIncrease.disabled = !enabled || isProcessing || (val >= MAX_SCALE);
+
+  // ปิดปุ่มหากกำลังประมวลผล (isProcessing) หรือค่าจะเกินลิมิต [-50, 50]
+  btnDec5.disabled = !enabled || isProcessing || (val - 5 < MIN_SCALE);
+  btnDec1.disabled = !enabled || isProcessing || (val - 1 < MIN_SCALE);
+  btnInc1.disabled = !enabled || isProcessing || (val + 1 > MAX_SCALE);
+  btnInc5.disabled = !enabled || isProcessing || (val + 5 > MAX_SCALE);
 }
 
 /* วาด Image หรือ ImageBitmap ลง Canvas */
@@ -517,25 +562,23 @@ async function validateBodyParts(){
   }
 }
 
-/* =====================================================================
-   เรียก api/eye/mask เพื่อเตรียม Mask ดวงตาล่วงหน้าไว้ใน Cache
-   ===================================================================== */
-async function prepareEyeMask(){
+async function prepareMask(toolName) {
   try {
-    const currentBlob = await getCanvasBlob();
+    const blobToSend = baseImageBlob || await getCanvasBlob();
     const formData = new FormData();
-    formData.append('image', currentBlob);
+    formData.append('image', blobToSend);
 
-    const res = await fetch(`${api_domain}/eye/mask`, {
+    // ยิงไปที่ /<toolName>/mask ตามชื่ออวัยวะ เช่น /eye/mask, /nose/mask, /brow/mask
+    const res = await fetch(`${api_domain}/${toolName}/mask`, {
       method: 'POST',
       body: formData
     });
 
-    if(res.ok){
-      console.log('Eye mask prepared in backend cache.');
+    if (res.ok) {
+      console.log(`${toolName} mask prepared in backend cache.`);
     }
-  } catch(err) {
-    console.error('Error preparing eye mask:', err);
+  } catch (err) {
+    console.error(`Error preparing ${toolName} mask:`, err);
   }
 }
 
@@ -597,8 +640,10 @@ async function changeStep(delta){
 
 /* ===== Event Listeners ===== */
 
-btnDecrease.addEventListener('click', () => changeStep(-STEP));
-btnIncrease.addEventListener('click', () => changeStep(STEP));
+btnDec5.addEventListener('click', () => changeStep(-5));
+btnDec1.addEventListener('click', () => changeStep(-1));
+btnInc1.addEventListener('click', () => changeStep(1));
+btnInc5.addEventListener('click', () => changeStep(5));
 
 chooseBtn.addEventListener('click', () => fileInput.click());
 changeBtn.addEventListener('click', () => fileInput.click());
@@ -636,9 +681,7 @@ toolButtons.forEach(btn => {
     baseImageBlob = await getCanvasBlob();
 
     // ถ้ากดเลือกปุ่มดวงตา ให้สั่งทำ Mask ล่วงหน้า
-    if (activeTool === 'eye') {
-      await prepareEyeMask();
-    }
+    await prepareMask(activeTool);
 
     await callReshapeApi(activeTool, reshapeState[activeTool] ?? 0);
   });
