@@ -40,10 +40,22 @@ async def reshape_matrix(image: UploadFile = File(...)):
 
 
 from utils.mask.mask_eye import validate_eye, create_eye_mask, eye_adjust
+from utils.mask.mask_mouth import validate_mouth, create_mouth_mask, mouth_adjust
+
+WARP_CACHE = {}
+
+def get_image_hash(image_bytes: bytes) -> str:
+    return hashlib.md5(image_bytes).hexdigest()
+
+# Dictionary สำหรับรวบรวมฟังก์ชัน Validate
 VALIDATORS = {
     "eye": validate_eye,
+    "mouth": validate_mouth,  # เพิ่ม validate ปาก
 }
 
+# =====================================================================
+# Validate Endpoint
+# =====================================================================
 @app.post("/validate")
 async def validate(image: UploadFile = File(...)):
     try:
@@ -52,10 +64,8 @@ async def validate(image: UploadFile = File(...)):
         matrix = np.array(pil_image)
 
         valid_parts = []
-
         for key, validator_fn in VALIDATORS.items():
-            is_valid = validator_fn(matrix)
-            if is_valid:
+            if validator_fn(matrix):
                 valid_parts.append(key)
 
         return valid_parts
@@ -63,30 +73,27 @@ async def validate(image: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
 
-WARP_CACHE = {}
 
-def get_image_hash(image_bytes: bytes) -> str:
-    return hashlib.md5(image_bytes).hexdigest()
-
+# =====================================================================
+# Endpoints สำหรับดวงตา (Eye)
+# =====================================================================
 @app.post("/eye/mask")
 async def eye_mask_endpoint(image: UploadFile = File(...)):
     try:
         contents = await image.read()
         img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_eye"
 
         nparr = np.frombuffer(contents, np.uint8)
         matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        # คำนวณ Mask และ V_warp
         M_eye_display, V_warp = create_eye_mask(matrix)
 
         if V_warp is None:
             raise ValueError("ไม่พบดวงตาในภาพเพื่อทำ Mask")
 
-        # บันทึก V_warp ลง Cache
-        WARP_CACHE[img_hash] = V_warp
+        WARP_CACHE[cache_key] = V_warp
 
-        # แปลงภาพ Mask (ขาว-ดำ) คืนกลับไปให้ Frontend แสดงผลพรีวิว (ถ้าต้องการ)
         success, encoded_mask = cv2.imencode('.png', M_eye_display)
         if not success:
             raise ValueError("Failed to encode mask image")
@@ -97,39 +104,107 @@ async def eye_mask_endpoint(image: UploadFile = File(...)):
         print(f"Error in /eye/mask: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
+
 @app.post("/eye")
 async def eye_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
     try:
         contents = await image.read()
         img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_eye"
 
-        # ดึง V_warp จาก Cache
-        if img_hash not in WARP_CACHE:
-            # หาก Cache หลุด ให้ทำการ Mask ใหม่ให้อัตโนมัติ (Fallback)
-            nparr = np.frombuffer(contents, np.uint8)
-            matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if matrix is None:
+            raise ValueError("ไม่สามารถอ่านข้อมูลรูปภาพได้")
+
+        if cache_key in WARP_CACHE:
+            V_warp = WARP_CACHE[cache_key]
+        else:
             _, V_warp = create_eye_mask(matrix)
             if V_warp is not None:
-                WARP_CACHE[img_hash] = V_warp
+                WARP_CACHE[cache_key] = V_warp
             else:
                 raise ValueError("ยังไม่ได้ทำ Mask หรือหาดวงตาไม่พบ")
-        else:
-            V_warp = WARP_CACHE[img_hash]
 
-            nparr = np.frombuffer(contents, np.uint8)
-            matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        # คำนวณ alpha จาก scale
         alpha = float(scale) / 100.0
-
-        # ปรับแต่งดวงตาด้วย eye_adjust (รวดเร็วมาก)
         result_matrix = eye_adjust(matrix, V_warp, alpha=alpha)
 
         success, encoded_img = cv2.imencode('.png', result_matrix)
+        if not success:
+            raise ValueError("Failed to encode image")
+
         return Response(content=encoded_img.tobytes(), media_type="image/png")
 
     except Exception as e:
         print(f"Error in /eye: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# =====================================================================
+# Endpoints สำหรับปาก (Mouth)
+# =====================================================================
+@app.post("/mouth/mask")
+async def mouth_mask_endpoint(image: UploadFile = File(...)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_mouth"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        M_mouth_display, V_warp = create_mouth_mask(matrix)
+
+        if V_warp is None:
+            raise ValueError("ไม่พบมุมปากในภาพเพื่อทำ Mask")
+
+        WARP_CACHE[cache_key] = V_warp
+
+        success, encoded_mask = cv2.imencode('.png', M_mouth_display)
+        if not success:
+            raise ValueError("Failed to encode mask image")
+
+        return Response(content=encoded_mask.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /mouth/mask: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/mouth")
+async def mouth_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_mouth"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if matrix is None:
+            raise ValueError("ไม่สามารถอ่านข้อมูลรูปภาพได้")
+
+        if cache_key in WARP_CACHE:
+            V_warp = WARP_CACHE[cache_key]
+        else:
+            _, V_warp = create_mouth_mask(matrix)
+            if V_warp is not None:
+                WARP_CACHE[cache_key] = V_warp
+            else:
+                raise ValueError("ยังไม่ได้ทำ Mask หรือหามุมปากไม่พบ")
+
+        alpha = float(scale) / 100.0
+        result_matrix = mouth_adjust(matrix, V_warp, alpha=alpha)
+
+        success, encoded_img = cv2.imencode('.png', result_matrix)
+        if not success:
+            raise ValueError("Failed to encode image")
+
+        return Response(content=encoded_img.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /mouth: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 if __name__ == "__main__":
