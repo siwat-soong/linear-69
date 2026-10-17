@@ -4,10 +4,10 @@ import os
 import time
 import cv2
 import numpy as np
-from body_common import prepare_body_data, gaussian_band
-from chest import chest_prepare, chest_adjust, T_CENTER_CHEST, SIGMA_CHEST
-from waist import waist_prepare, waist_adjust, T_CENTER_WAIST, SIGMA_WAIST
-from hips import hips_prepare, hips_adjust, T_CENTER_HIPS, SIGMA_HIPS
+from app.utils.mask.body_common import prepare_body_data, gaussian_band
+from app.utils.mask.chest import chest_prepare, chest_adjust, T_CENTER_CHEST, SIGMA_CHEST
+from app.utils.mask.waist import waist_prepare, waist_adjust, T_CENTER_WAIST, SIGMA_WAIST
+from app.utils.mask.hips import hips_prepare, hips_adjust, T_CENTER_HIPS, SIGMA_HIPS
 
 IMAGE_PATH = './dataset/img_0221_jpeg.jpg'
 OUT_DIR = './experiment/phase2/out_test'

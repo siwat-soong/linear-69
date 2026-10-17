@@ -44,6 +44,9 @@ from utils.mask.mask_mouth import validate_mouth, create_mouth_mask, mouth_adjus
 from utils.mask.mask_cheek import validate_cheek, create_cheek_mask, cheek_adjust
 from utils.mask.mask_eyebrow import validate_brow, create_brow_mask, brow_adjust
 from utils.mask.mask_nose import validate_nose, create_nose_mask, nose_adjust
+from utils.mask.chest import validate_chest, create_chest_mask, chest_adjust
+from utils.mask.waist import validate_waist, create_waist_mask, waist_adjust
+from utils.mask.hips import validate_hips, create_hips_mask, hips_adjust
 
 WARP_CACHE = {}
 
@@ -57,7 +60,10 @@ VALIDATORS = {
     "eye": validate_eye,
     "nose": validate_nose,
     "mouth": validate_mouth,  # เพิ่ม validate ปาก
-    "cheek": validate_cheek
+    "cheek": validate_cheek,
+    "chest": validate_chest,
+    "waist": validate_waist,
+    "hips": validate_hips
 }
 
 # =====================================================================
@@ -387,6 +393,71 @@ async def nose_adjust_endpoint(image: UploadFile = File(...), scale: float = For
     except Exception as e:
         print(f"Error in /nose: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+# Helper Generic Endpoint Builder สำหรับส่วนลำตัว
+async def handle_torso_mask(image: UploadFile, part_name: str, mask_fn):
+    contents = await image.read()
+    img_hash = get_image_hash(contents)
+    cache_key = f"{img_hash}_{part_name}"
+
+    nparr = np.frombuffer(contents, np.uint8)
+    matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    M_display, body_cache_data = mask_fn(matrix)
+    if body_cache_data is None:
+        raise HTTPException(status_code=400, detail=f"ไม่พบโครงสร้างลำตัวเพื่อทำ Mask ({part_name})")
+
+    WARP_CACHE[cache_key] = body_cache_data
+    success, encoded_mask = cv2.imencode('.png', M_display)
+    return Response(content=encoded_mask.tobytes(), media_type="image/png")
+
+async def handle_torso_adjust(image: UploadFile, scale: float, part_name: str, mask_fn, adjust_fn):
+    contents = await image.read()
+    img_hash = get_image_hash(contents)
+    cache_key = f"{img_hash}_{part_name}"
+
+    nparr = np.frombuffer(contents, np.uint8)
+    matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    if cache_key in WARP_CACHE:
+        body_cache_data = WARP_CACHE[cache_key]
+    else:
+        _, body_cache_data = mask_fn(matrix)
+        if body_cache_data is not None:
+            WARP_CACHE[cache_key] = body_cache_data
+        else:
+            raise HTTPException(status_code=400, detail=f"ไม่พบข้อมูล Mask ({part_name})")
+
+    result_matrix = adjust_fn(matrix, body_cache_data, scale_val=scale)
+    success, encoded_img = cv2.imencode('.png', result_matrix)
+    return Response(content=encoded_img.tobytes(), media_type="image/png")
+
+# Endpoints Chest
+@app.post("/chest/mask")
+async def chest_mask_endpoint(image: UploadFile = File(...)):
+    return await handle_torso_mask(image, "chest", create_chest_mask)
+
+@app.post("/chest")
+async def chest_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    return await handle_torso_adjust(image, scale, "chest", create_chest_mask, chest_adjust)
+
+# Endpoints Waist
+@app.post("/waist/mask")
+async def waist_mask_endpoint(image: UploadFile = File(...)):
+    return await handle_torso_mask(image, "waist", create_waist_mask)
+
+@app.post("/waist")
+async def waist_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    return await handle_torso_adjust(image, scale, "waist", create_waist_mask, waist_adjust)
+
+# Endpoints Hips
+@app.post("/hips/mask")
+async def hips_mask_endpoint(image: UploadFile = File(...)):
+    return await handle_torso_mask(image, "hips", create_hips_mask)
+
+@app.post("/hips")
+async def hips_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    return await handle_torso_adjust(image, scale, "hips", create_hips_mask, hips_adjust)
 
 if __name__ == "__main__":
     import uvicorn
