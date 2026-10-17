@@ -47,7 +47,7 @@ button,input{font:inherit}
 
 .tool-rail,.panel{background:var(--surface);border-radius:28px;box-shadow:var(--shadow)}
 
-/* ===== Tools : แสดงครบทุกปุ่ม ปุ่มจะยืด/หดตามความสูงจอ ===== */
+/* ===== Tools ===== */
 .tool-rail{
   padding:12px 8px; min-height:0;
   display:flex; flex-direction:column;
@@ -71,14 +71,34 @@ button,input{font:inherit}
 .tool:active:not(:disabled){transform:scale(.96)}
 .tool:disabled{opacity:.35;cursor:not-allowed}
 
-/* ===== Canvas : ขนาด = min(กว้างที่มี, สูงที่มี, 640) จึงเห็นภาพเต็มเสมอ ===== */
+/* ===== Canvas ===== */
 .workspace{min-width:0;min-height:0;display:flex;flex-direction:column;align-items:center;gap:10px}
 .stage{flex:1;min-height:0;width:100%;container-type:size;display:grid;place-items:center}
+
 .canvas-shell{
-  position:relative; width:min(100cqw,100cqh,640px); aspect-ratio:1;
-  background:var(--surface);border-radius:28px;box-shadow:var(--shadow);overflow:hidden;
+  position:relative; 
+  max-width:min(100cqw, 640px);
+  max-height:min(100cqh, 640px);
+  width: auto;
+  height: auto;
+  background:var(--surface);
+  border-radius:28px;
+  box-shadow:var(--shadow);
+  overflow:hidden;             /* ตัดส่วนเกินตามขอบโค้ง */
+  display:flex;
+  align-items:center;
+  justify-content:center;
 }
-#canvas{width:100%;height:100%;display:block;background:#FFFDF9}
+
+#canvas{
+  max-width:100%;
+  max-height:min(100cqh, 640px);
+  width:auto;
+  height:auto;
+  object-fit: contain;
+  display:block;
+  background:#FFFDF9;
+}
 .drop-overlay{
   position:absolute;inset:14px;border:1.5px dashed var(--line);
   border-radius:20px;display:grid;place-items:center;text-align:center;
@@ -147,7 +167,6 @@ input[type=range]:disabled{opacity:.35}
 .note{margin-top:18px;font-size:10px;line-height:1.55;color:var(--muted)}
 .project-name{margin:22px 0 0;padding-top:14px;border-top:1px solid #EEE2D4;font-size:11px;line-height:1.5;color:var(--muted);text-align:center}
 
-/* ===== Mobile : layout แบบ Meitu (หัว / ภาพ / slider / แถบ tools ล่าง) ไม่เลื่อนหน้า ===== */
 @media(max-width:820px){
   body{padding:0}
   .app{
@@ -206,7 +225,6 @@ input[type=range]:disabled{opacity:.35}
 
   <aside class="tool-rail">
     <div class="tool-title">TOOLS</div>
-    <!-- ปุ่มเครื่องมือถูกสร้างจาก ICONS ใน <script> ด้านล่าง -->
     <div class="tools" id="tools"></div>
   </aside>
 
@@ -263,15 +281,6 @@ input[type=range]:disabled{opacity:.35}
 </main>
 
 <script>
-/* =====================================================================
-   ICONS  —  จุดเดียวที่ต้องแก้เมื่ออยากเปลี่ยนไอคอน / ชื่อปุ่ม / ลำดับปุ่ม
-   - key (brow, eye, ...) = ชื่อเครื่องมือที่ใช้ในโค้ด reshape
-   - label = ข้อความใต้ไอคอน
-   - viewBox = (ไม่ใส่ก็ได้) ขนาดกริดของไอคอน ค่าเริ่มต้น '0 0 32 32'
-   - svg   = เนื้อใน <svg> ใช้ currentColor เพื่อให้สีตามธีมอัตโนมัติ
-     (ไอคอนทึบใส่ fill="currentColor" stroke="none", ไอคอนเส้นใส่ stroke="currentColor")
-   ลำดับในรายการนี้ = ลำดับปุ่มบนหน้าจอ
-   ===================================================================== */
 const ICONS = {
   brow: {
     label: 'Brow',
@@ -332,9 +341,12 @@ const undoBtn = document.getElementById('undoBtn');
 const redoBtn = document.getElementById('redoBtn');
 const toolsEl = document.getElementById('tools');
 
-let sourceImage = null;
-let originalFrame = null;
+let sourceImage = null;       // เก็บ HTMLImageElement รูปปัจจุบัน
+let originalFrame = null;     // เก็บ ImageData รูปต้นฉบับไว้พรีวิว
 let activeTool = Object.keys(ICONS)[0];
+let activeAbortController = null; // ช่วยยกเลิก API call เก่ากรณีเลื่อน slider ถี่ๆ
+
+let api_domain = 'http://127.0.0.1:8000'
 
 const reshapeState = {};
 Object.keys(ICONS).forEach(key => reshapeState[key] = 0);
@@ -353,12 +365,14 @@ const toolButtons = [...document.querySelectorAll('.tool')];
 selectedTool.textContent = ICONS[activeTool].label;
 
 function setEditorEnabled(enabled){
-  toolButtons.forEach(btn => btn.disabled = !enabled);
   scaleRange.disabled = !enabled;
   downloadBtn.disabled = !enabled;
   resetBtn.disabled = !enabled;
   changeBtn.disabled = !enabled;
   previewBtn.disabled = !enabled;
+  if(!enabled){
+    toolButtons.forEach(btn => btn.disabled = true);
+  }
 }
 
 function updateRangeFill(){
@@ -374,18 +388,34 @@ function updateRangeFill(){
       #DDD7D0 100%)`;
 }
 
-function drawImageCover(img){
-  const cw = canvas.width;
-  const ch = canvas.height;
-  const scale = Math.max(cw/img.width, ch/img.height);
-  const w = img.width * scale;
-  const h = img.height * scale;
-  const x = (cw-w)/2;
-  const y = (ch-h)/2;
+/* วาด Image หรือ ImageBitmap ลง Canvas */
+function drawImageToCanvas(img){
+  const maxDim = 640;
+  let w = img.width;
+  let h = img.height;
 
-  ctx.clearRect(0,0,cw,ch);
-  ctx.drawImage(img,x,y,w,h);
-  originalFrame = ctx.getImageData(0,0,cw,ch);
+  if (w > maxDim || h > maxDim) {
+    if (w > h) {
+      h = Math.round((h * maxDim) / w);
+      w = maxDim;
+    } else {
+      w = Math.round((w * maxDim) / h);
+      h = maxDim;
+    }
+  }
+
+  canvas.width = w;
+  canvas.height = h;
+
+  dropZone.style.aspectRatio = `${w} / ${h}`;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+}
+
+/* บันทึกรูปภาพปัจจุบันบน Canvas เก็บเป็น originalFrame สำหรับพรีวิว */
+function saveCurrentFrameAsOriginal(){
+  originalFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
 }
 
 function resetControls(){
@@ -395,30 +425,137 @@ function resetControls(){
   updateRangeFill();
 }
 
-/* โหลดรูป — ใช้ทั้งตอนเลือกรูปครั้งแรก และตอนเปลี่ยนรูป */
-function loadFile(file){
+/* แปลง Canvas ให้เป็น Blob (File) สำหรับส่งขึ้น API */
+function getCanvasBlob(){
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+}
+
+/* =====================================================================
+   ข้อที่ 1: อัปโหลดรูปภาพ -> เรียก api/reshape_matrix เพื่อ clean ข้อมูล
+   ===================================================================== */
+async function loadFile(file){
   if(!file || !file.type.startsWith('image/')) return;
 
-  const reader = new FileReader();
-  reader.onload = e => {
-    const img = new Image();
-    img.onload = () => {
-      sourceImage = img;
-      drawImageCover(img);
-      dropZone.classList.add('loaded');
-      setEditorEnabled(true);
-      resetControls();
-    };
-    img.src = e.target.result;
-  };
-  reader.readAsDataURL(file);
+  try {
+    // 1.1 ส่งรูปไปยัง api/reshape_matrix
+    const formData = new FormData();
+    formData.append('image', file);
+
+    const res = await fetch(api_domain + '/reshape_matrix', {
+      method: 'POST',
+      body: formData
+    });
+
+    if(!res.ok) throw new Error('Reshape matrix clean failed');
+
+    // 1.2 แปลงผลลัพธ์จาก API กลับมาเป็นภาพ และวาดลง Canvas
+    const blob = await res.blob();
+    const imageBitmap = await createImageBitmap(blob);
+    
+    sourceImage = imageBitmap;
+    drawImageToCanvas(imageBitmap);
+    saveCurrentFrameAsOriginal(); // บันทึกไว้เป็น Original Preview
+    
+    dropZone.classList.add('loaded');
+    setEditorEnabled(true);
+    resetControls();
+
+    // 1.3 เรียกข้อที่ 2 ต่อเนื่องเพื่อ Validate อวัยวะ
+    await validateBodyParts();
+
+  } catch(err) {
+    console.error('Error in loadFile:', err);
+    alert('เกิดข้อผิดพลาดในการ Clean ข้อมูลรูปภาพ');
+  }
 }
+
+/* =====================================================================
+   ข้อที่ 2: เรียก api/validate เช็กอวัยวะที่ปรับได้ แล้วเปิด/ปิดปุ่ม
+   ===================================================================== */
+async function validateBodyParts(){
+  try {
+    const currentBlob = await getCanvasBlob();
+    const formData = new FormData();
+    formData.append('image', currentBlob);
+
+    const res = await fetch(api_domain + '/validate', {
+      method: 'POST',
+      body: formData
+    });
+
+    if(!res.ok) throw new Error('Validate failed');
+
+    const data = await res.json(); 
+    /*
+      คาดหวังรูปแบบ Response ได้ 2 แบบ:
+      1. Array เช่น: ["brow", "eye", "waist"]
+      2. Object เช่น: { brow: true, eye: true, nose: false }
+    */
+    const validParts = Array.isArray(data) 
+      ? data 
+      : Object.keys(data).filter(k => data[k]);
+
+    // เปิด/ปิด การใช้งานแต่ละปุ่มตามค่านี่ส่งกลับมา
+    toolButtons.forEach(btn => {
+      const toolKey = btn.dataset.tool;
+      btn.disabled = !validParts.includes(toolKey);
+    });
+
+    // หากปุ่มที่เลือกอยู่ปัจจุบันดันถูก disabled ให้สลับไปใช้ปุ่มแรกที่ใช้งานได้
+    if(toolButtons.find(b => b.dataset.tool === activeTool)?.disabled){
+      const firstAvailable = toolButtons.find(b => !b.disabled);
+      if(firstAvailable) firstAvailable.click();
+    }
+
+  } catch(err) {
+    console.error('Error in validateBodyParts:', err);
+  }
+}
+
+/* =====================================================================
+   ข้อที่ 3: เรียก API ปรับอวัยวะเมื่อเลือกปุ่ม หรือเลื่อน Slider
+   ===================================================================== */
+async function callReshapeApi(toolName, scaleAmount){
+  // ยกเลิก API Call เก่าถ้าผู้ใช้เลื่อน slider เร็วเกินไป
+  if(activeAbortController){
+    activeAbortController.abort();
+  }
+  activeAbortController = new AbortController();
+
+  try {
+    const currentBlob = await getCanvasBlob();
+    const formData = new FormData();
+    formData.append('image', currentBlob);
+    formData.append('scale', scaleAmount);
+
+    const res = await fetch(`api/${toolName}`, {
+      method: 'POST',
+      body: formData,
+      signal: activeAbortController.signal
+    });
+
+    if(!res.ok) throw new Error(`API for ${toolName} failed`);
+
+    const resultBlob = await res.blob();
+    const updatedImage = await createImageBitmap(resultBlob);
+
+    // แสดงผลภาพใหม่ที่ปรับแต่งแล้วลงใน Canvas
+    drawImageToCanvas(updatedImage);
+
+  } catch(err) {
+    if(err.name !== 'AbortError'){
+      console.error(`Error calling api/${toolName}:`, err);
+    }
+  }
+}
+
+/* ===== Event Listeners ===== */
 
 chooseBtn.addEventListener('click', () => fileInput.click());
 changeBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => {
   loadFile(e.target.files[0]);
-  fileInput.value = '';   // เลือกไฟล์เดิมซ้ำได้
+  fileInput.value = '';
 });
 
 ['dragenter','dragover'].forEach(type => {
@@ -433,11 +570,11 @@ fileInput.addEventListener('change', e => {
     dropZone.classList.remove('dragging');
   });
 });
-/* ลากรูปใหม่มาวางทับบนภาพก็เปลี่ยนรูปได้ */
 dropZone.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
 
+/* กดเลือกปุ่มอวัยวะ */
 toolButtons.forEach(btn => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     toolButtons.forEach(item => item.classList.remove('active'));
     btn.classList.add('active');
 
@@ -447,30 +584,31 @@ toolButtons.forEach(btn => {
     scaleRange.value = reshapeState[activeTool] ?? 0;
     scaleValue.textContent = scaleRange.value > 0 ? `+${scaleRange.value}` : scaleRange.value;
     updateRangeFill();
+
+    // 3.1 บันทึกรูปปัจจุบันบน Canvas เป็น original preview
+    saveCurrentFrameAsOriginal();
+
+    // 3.2 เรียกใช้ API ของอวัยวะนั้นๆ
+    await callReshapeApi(activeTool, scaleRange.value);
   });
 });
 
+/* เลื่อน Slider */
 scaleRange.addEventListener('input', () => {
   const value = Number(scaleRange.value);
   scaleValue.textContent = value > 0 ? `+${value}` : value;
   reshapeState[activeTool] = value;
   updateRangeFill();
 
-  /*
-    จุดเชื่อมกับ mask/reshape จริง:
-    applyReshape({
-      canvas,
-      sourceImage,
-      part: activeTool,   // brow | eye | nose | mouth | chest | waist | butt | arm | leg
-      amount: value
-    });
-  */
+  // 3.3 เรียกใช้ API อวัยวะพร้อมส่งค่า scale ล่าสุดเข้าไป
+  callReshapeApi(activeTool, value);
 });
 
 resetBtn.addEventListener('click', () => {
   if(!sourceImage) return;
   resetControls();
-  drawImageCover(sourceImage);
+  drawImageToCanvas(sourceImage);
+  saveCurrentFrameAsOriginal();
 });
 
 function showOriginal(){
@@ -483,7 +621,6 @@ function showOriginal(){
 function stopPreview(){
   previewBtn.classList.remove('active');
   previewBtn.textContent = 'Hold to preview original';
-  // หลังต่อ reshape engine ให้ redraw ภาพที่แก้แล้วตรงนี้
 }
 
 previewBtn.addEventListener('pointerdown', showOriginal);
