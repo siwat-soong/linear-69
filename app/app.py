@@ -43,6 +43,7 @@ from utils.mask.mask_eye import validate_eye, create_eye_mask, eye_adjust
 from utils.mask.mask_mouth import validate_mouth, create_mouth_mask, mouth_adjust
 from utils.mask.mask_cheek import validate_cheek, create_cheek_mask, cheek_adjust
 from utils.mask.mask_eyebrow import validate_brow, create_brow_mask, brow_adjust
+from utils.mask.mask_nose import validate_nose, create_nose_mask, nose_adjust
 
 WARP_CACHE = {}
 
@@ -54,6 +55,7 @@ def get_image_hash(image_bytes: bytes) -> str:
 VALIDATORS = {
     "brow": validate_brow,
     "eye": validate_eye,
+    "nose": validate_nose,
     "mouth": validate_mouth,  # เพิ่ม validate ปาก
     "cheek": validate_cheek
 }
@@ -79,9 +81,6 @@ async def validate(image: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
 
 
-# =====================================================================
-# Endpoints สำหรับดวงตา (Eye)
-# =====================================================================
 @app.post("/eye/mask")
 async def eye_mask_endpoint(image: UploadFile = File(...)):
     try:
@@ -108,7 +107,6 @@ async def eye_mask_endpoint(image: UploadFile = File(...)):
     except Exception as e:
         print(f"Error in /eye/mask: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @app.post("/eye")
 async def eye_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
@@ -145,10 +143,6 @@ async def eye_adjust_endpoint(image: UploadFile = File(...), scale: float = Form
         print(f"Error in /eye: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-
-# =====================================================================
-# Endpoints สำหรับปาก (Mouth)
-# =====================================================================
 @app.post("/mouth/mask")
 async def mouth_mask_endpoint(image: UploadFile = File(...)):
     try:
@@ -175,7 +169,6 @@ async def mouth_mask_endpoint(image: UploadFile = File(...)):
     except Exception as e:
         print(f"Error in /mouth/mask: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @app.post("/mouth")
 async def mouth_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
@@ -239,7 +232,6 @@ async def cheek_mask_endpoint(image: UploadFile = File(...)):
         print(f"Error in /cheek/mask: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.post("/cheek")
 async def cheek_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
     try:
@@ -299,7 +291,6 @@ async def brow_mask_endpoint(image: UploadFile = File(...)):
         print(f"Error in /brow/mask: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.post("/brow")
 async def brow_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
     try:
@@ -333,6 +324,68 @@ async def brow_adjust_endpoint(image: UploadFile = File(...), scale: float = For
 
     except Exception as e:
         print(f"Error in /brow: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/nose/mask")
+async def nose_mask_endpoint(image: UploadFile = File(...)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_nose"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        M_nose_display, V_warp = create_nose_mask(matrix)
+
+        if V_warp is None:
+            raise ValueError("ไม่พบใบหน้า/จมูกในภาพเพื่อทำ Mask")
+
+        WARP_CACHE[cache_key] = V_warp
+
+        success, encoded_mask = cv2.imencode('.png', M_nose_display)
+        if not success:
+            raise ValueError("Failed to encode mask image")
+
+        return Response(content=encoded_mask.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /nose/mask: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/nose")
+async def nose_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_nose"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if matrix is None:
+            raise ValueError("ไม่สามารถอ่านข้อมูลรูปภาพได้")
+
+        if cache_key in WARP_CACHE:
+            V_warp = WARP_CACHE[cache_key]
+        else:
+            _, V_warp = create_nose_mask(matrix)
+            if V_warp is not None:
+                WARP_CACHE[cache_key] = V_warp
+            else:
+                raise ValueError("ยังไม่ได้ทำ Mask หรือหาจมูกไม่พบ")
+
+        alpha = float(scale) / 100.0
+        result_matrix = nose_adjust(matrix, V_warp, alpha=alpha)
+
+        success, encoded_img = cv2.imencode('.png', result_matrix)
+        if not success:
+            raise ValueError("Failed to encode image")
+
+        return Response(content=encoded_img.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /nose: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 if __name__ == "__main__":
