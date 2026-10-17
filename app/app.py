@@ -42,6 +42,7 @@ async def reshape_matrix(image: UploadFile = File(...)):
 from utils.mask.mask_eye import validate_eye, create_eye_mask, eye_adjust
 from utils.mask.mask_mouth import validate_mouth, create_mouth_mask, mouth_adjust
 from utils.mask.mask_cheek import validate_cheek, create_cheek_mask, cheek_adjust
+from utils.mask.mask_eyebrow import validate_brow, create_brow_mask, brow_adjust
 
 WARP_CACHE = {}
 
@@ -51,6 +52,7 @@ def get_image_hash(image_bytes: bytes) -> str:
 
 # Dictionary สำหรับรวบรวมฟังก์ชัน Validate
 VALIDATORS = {
+    "brow": validate_brow,
     "eye": validate_eye,
     "mouth": validate_mouth,  # เพิ่ม validate ปาก
     "cheek": validate_cheek
@@ -268,6 +270,69 @@ async def cheek_adjust_endpoint(image: UploadFile = File(...), scale: float = Fo
 
     except Exception as e:
         print(f"Error in /cheek: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/brow/mask")
+async def brow_mask_endpoint(image: UploadFile = File(...)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_brow"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        M_brow_display, V_warp = create_brow_mask(matrix)
+
+        if V_warp is None:
+            raise ValueError("ไม่พบใบหน้า/คิ้วในภาพเพื่อทำ Mask")
+
+        WARP_CACHE[cache_key] = V_warp
+
+        success, encoded_mask = cv2.imencode('.png', M_brow_display)
+        if not success:
+            raise ValueError("Failed to encode mask image")
+
+        return Response(content=encoded_mask.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /brow/mask: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/brow")
+async def brow_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_brow"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if matrix is None:
+            raise ValueError("ไม่สามารถอ่านข้อมูลรูปภาพได้")
+
+        if cache_key in WARP_CACHE:
+            V_warp = WARP_CACHE[cache_key]
+        else:
+            _, V_warp = create_brow_mask(matrix)
+            if V_warp is not None:
+                WARP_CACHE[cache_key] = V_warp
+            else:
+                raise ValueError("ยังไม่ได้ทำ Mask หรือหาคิ้วไม่พบ")
+
+        alpha = float(scale) / 100.0
+        result_matrix = brow_adjust(matrix, V_warp, alpha=alpha)
+
+        success, encoded_img = cv2.imencode('.png', result_matrix)
+        if not success:
+            raise ValueError("Failed to encode image")
+
+        return Response(content=encoded_img.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /brow: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 if __name__ == "__main__":
