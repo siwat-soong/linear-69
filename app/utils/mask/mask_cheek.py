@@ -1,13 +1,27 @@
 import os
-os.environ["TORCHDYNAMO_DISABLE"] = "1"  # ปิด PyTorch Compiler ป้องกัน Error เรื่อง cl.exe[cite: 1]
+os.environ["TORCHDYNAMO_DISABLE"] = "1"  # ปิด PyTorch Compiler ป้องกัน Error เรื่อง cl.exe
 
 import cv2
 import face_alignment
 import numpy as np
 from scipy.signal import convolve2d
 
+# Global Detector Instance (โหลดโมเดลครั้งเดียวแบบ Lazy Loading)
+_fa = None
+
+def get_fa_detector():
+    global _fa
+    if _fa is None:
+        _fa = face_alignment.FaceAlignment(
+            face_alignment.LandmarksType.TWO_D,
+            flip_input=False,
+            device='cpu'
+        )
+    return _fa
+
+
 # =========================================================
-# Step 1: Face Midline & Direction Vector (แก้ไขเรื่อง Vectorization)[cite: 1]
+# Helper Functions: Coordinate & Vector Calculation
 # =========================================================
 def calculate_face_midline(p_nose, p_chin):
     v_midline = p_chin - p_nose
@@ -16,14 +30,12 @@ def calculate_face_midline(p_nose, p_chin):
 
 def project_point_to_line(p, p_nose, v_midline, norm_sq):
     a = p - p_nose
-    # ใช้ np.sum + keepdims=True เพื่อรองรับทั้งจุดเดียว และ Matrix P_grid (H, W, 2)[cite: 1]
     c = np.sum(a * v_midline, axis=-1, keepdims=True) / norm_sq
     p_proj = p_nose + c * v_midline
     return p_proj
 
 def calculate_displacement_direction(p, p_proj):
     d = p_proj - p
-    # ใส่ axis=-1, keepdims=True เพื่อหา Norm บนแกนเวกเตอร์ (x, y)[cite: 1]
     distance = np.linalg.norm(d, axis=-1, keepdims=True)
     with np.errstate(divide='ignore', invalid='ignore'):
         u = np.where(distance == 0, 0.0, d / distance)
@@ -33,12 +45,11 @@ def face_midline_vector(P_nose, P_chin, p):
     v_midline, norm_sq = calculate_face_midline(P_nose, P_chin)
     p_proj = project_point_to_line(p, P_nose, v_midline, norm_sq)
     d, distance, u = calculate_displacement_direction(p, p_proj)
-
     return d, distance, u
 
 
 # =========================================================
-# Step 2: Soft Mask / Weight Map Generation[cite: 1]
+# Soft Mask & Displacement Field Generation
 # =========================================================
 def create_2d_gaussian_kernel(kernel_size=15, sigma=5.0):
     ax = np.linspace(-(kernel_size // 2), kernel_size // 2, kernel_size)
@@ -63,12 +74,8 @@ def generate_soft_mask(image_shape, cheek_landmarks, kernel_size=15, sigma=5.0):
 
     return soft_mask
 
-
-# =========================================================
-# Step 3: Displacement Field Matrix Generation (แก้ไขชื่อตัวแปร soft_mask_W)[cite: 1]
-# =========================================================
 def generate_displacement_field(image_shape, p_nose, p_chin, soft_mask_W, k=10.0):
-    h, w = image_shape  # ตัวแปร w ตรงนี้จะไม่ซ้ำกับ soft_mask_W แล้ว[cite: 1]
+    h, w = image_shape
 
     x_coord = np.arange(w, dtype=np.float32)
     y_coord = np.arange(h, dtype=np.float32)
@@ -82,10 +89,6 @@ def generate_displacement_field(image_shape, p_nose, p_chin, soft_mask_W, k=10.0
 
     return displacement_field
 
-
-# =========================================================
-# Step 4: Inverse Mapping & Bilinear Interpolation Warping[cite: 1]
-# =========================================================
 def bilinear_interpolate(image, x_indices, y_indices):
     h, w = image.shape[:2]
 
@@ -117,26 +120,50 @@ def bilinear_interpolate(image, x_indices, y_indices):
     return I_out
 
 
-# =========================================================
-# Helper & Main Execution[cite: 1]
-# =========================================================
-def extract_landmarks_from_image(image_path: str):
-    image = cv2.imread(image_path)
-    if image is None:
-        raise FileNotFoundError(f"ไม่พบไฟล์รูปภาพที่ตำแหน่ง: {image_path}")
+# =====================================================================
+# 1. ฟังก์ชัน Validate: ตรวจสอบแค่ว่าเจอแก้ม/ใบหน้าไหม (คืนค่า 1 หรือ 0)
+# =====================================================================
+def validate_cheek(image_matrix: np.ndarray) -> int:
+    """
+    ตรวจสอบว่าเจอจุด Landmark ของใบหน้าและแก้มหรือไม่
+    Return: 1 ถ้าเจอ, 0 ถ้าไม่เจอ
+    """
+    if image_matrix is None:
+        return 0
 
-    fa = face_alignment.FaceAlignment(
-        face_alignment.LandmarksType.TWO_D, 
-        flip_input=False,
-        device='cpu'
-    )
+    try:
+        fa = get_fa_detector()
+        preds = fa.get_landmarks(image_matrix)
 
-    preds = fa.get_landmarks(image)
+        if preds is None or len(preds) == 0:
+            return 0
+
+        landmarks = preds[0]
+        if len(landmarks) > 14:
+            return 1
+        return 0
+    except Exception:
+        return 0
+
+
+# =====================================================================
+# 2. ฟังก์ชัน Masking: คำนวณสร้าง Mask และ Vector Field (V_warp)
+# =====================================================================
+def create_cheek_mask(image_matrix: np.ndarray, k_strength=10.0):
+    """
+    สร้าง Mask และ Vector Field (V_warp) สำหรับแก้ม
+    Return: (M_cheek_display, V_warp) หรือ (None, None)
+    """
+    if image_matrix is None:
+        return None, None
+
+    fa = get_fa_detector()
+    preds = fa.get_landmarks(image_matrix)
+
     if preds is None or len(preds) == 0:
-        raise ValueError("ไม่พบใบหน้าในรูปภาพนี้")
+        return None, None
 
     landmarks = preds[0]
-
     get_pt = lambda idx: np.array([landmarks[idx][0], landmarks[idx][1]], dtype=np.float32)
 
     p_nose = get_pt(30)
@@ -145,38 +172,37 @@ def extract_landmarks_from_image(image_path: str):
     cheek_indices = [2, 3, 4, 12, 13, 14]
     cheek_landmarks = [get_pt(idx) for idx in cheek_indices]
 
-    return image, p_nose, p_chin, cheek_landmarks
-
-
-if __name__ == "__main__":
-    input_path = ''
-
-    print('[O] Start')
-    img, p_nose, p_chin, cheek_landmarks = extract_landmarks_from_image(input_path)
-    print('[O] Extracted Image')
-    h, w, _ = img.shape
+    h, w = image_matrix.shape[:2]
 
     kernel_size = int(max(w, h) * 0.08) | 1
     sigma = kernel_size / 3.0
-    W = generate_soft_mask((h, w), cheek_landmarks, kernel_size=kernel_size, sigma=sigma)
-    print('[O] Weight Generated')
+    soft_mask_W = generate_soft_mask((h, w), cheek_landmarks, kernel_size=kernel_size, sigma=sigma)
 
-    k_strength = 10.0  # ปรับเพิ่ม/ลด แรงบีบได้ตรงนี้[cite: 1]
-    D = generate_displacement_field((h, w), p_nose, p_chin, W, k=k_strength)
-    print('[O] Field Generated')
+    # สร้าง Displacement Field (V_warp)
+    V_warp = generate_displacement_field((h, w), p_nose, p_chin, soft_mask_W, k=k_strength)
+    M_cheek_display = (np.clip(soft_mask_W, 0.0, 1.0) * 255).astype(np.uint8)
+
+    return M_cheek_display, V_warp
+
+
+# =====================================================================
+# 3. ฟังก์ชัน Adjust: ใช้ V_warp กับค่า alpha ปรับแต่งภาพ
+# =====================================================================
+def cheek_adjust(image_matrix: np.ndarray, V_warp: np.ndarray, alpha: float = 0.0):
+    """
+    ประมวลผลปรับแต่งแก้มโดยคำนวณเฉพาะค่า alpha กับ V_warp ที่เตรียมไว้แล้ว
+    """
+    h, w = image_matrix.shape[:2]
 
     x_coords = np.arange(w, dtype=np.float32)
     y_coords = np.arange(h, dtype=np.float32)
     X, Y = np.meshgrid(x_coords, y_coords)
-            
-    X_src = X - D[:, :, 0]
-    Y_src = Y - D[:, :, 1]
-            
-    warped_img = bilinear_interpolate(img.astype(np.float32), X_src, Y_src)
-    warped_img = np.clip(warped_img, 0, 255).astype(np.uint8)
-    print('[O] Done')
 
-    cv2.imshow('warped', warped_img)
-    cv2.imshow('original', img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # คำนวณพิกัดย้อนกลับด้วย alpha scaling
+    X_src = X - (alpha * V_warp[:, :, 0])
+    Y_src = Y - (alpha * V_warp[:, :, 1])
+
+    warped_img = bilinear_interpolate(image_matrix.astype(np.float32), X_src, Y_src)
+    warped_img = np.clip(warped_img, 0, 255).astype(np.uint8)
+
+    return warped_img
