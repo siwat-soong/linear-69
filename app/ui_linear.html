@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Body Reshaping</title>
+<style>
+:root{
+  --bg:#F8E7C2; --surface:#FFF9F1; --surface2:#FDF2E2;
+  --orange:#F2A65A; --orangeDark:#E58A35;
+  --brown:#5C3A21; --brown2:#8B6246; --line:#DDBE98;
+  --muted:#A78E79; --disabled:#D9D3CC; --disabledText:#9A958E;
+  --shadow:0 14px 40px rgba(92,58,33,.10);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; padding:24px; overflow:hidden;
+  font-family:Inter,"Noto Sans Thai",system-ui,sans-serif;
+  background:var(--bg); color:var(--brown);
+  -webkit-tap-highlight-color:transparent;
+}
+button,input{font:inherit}
+
+/* ===== Layout (desktop) : ทั้งหน้าพอดีจอ ไม่ต้องเลื่อน ===== */
+.app{
+  height:100%; max-width:1480px; margin:auto;
+  display:grid; grid-template-columns:88px minmax(0,1fr) 260px;
+  grid-template-rows:auto minmax(0,1fr);
+  gap:18px;
+}
+.topbar{
+  grid-column:1/-1; display:flex; justify-content:space-between;
+  align-items:center; gap:16px; padding:4px;
+}
+.brand h1{margin:0;font-size:clamp(22px,2.2vw,34px);letter-spacing:-.03em}
+.top-logo{display:none}
+.history{display:flex;gap:8px}
+.icon-btn{
+  width:42px;height:42px;border:0;border-radius:50%;
+  background:rgba(255,249,241,.7);color:var(--brown);
+  cursor:pointer;transition:.18s ease;
+}
+.icon-btn:hover:not(:disabled){background:var(--surface);transform:translateY(-1px)}
+.icon-btn:active:not(:disabled){transform:scale(.96);background:#F5D8B3}
+.icon-btn:disabled{opacity:.35;cursor:not-allowed}
+
+.tool-rail,.panel{background:var(--surface);border-radius:28px;box-shadow:var(--shadow)}
+
+/* ===== Tools : แสดงครบทุกปุ่ม ปุ่มจะยืด/หดตามความสูงจอ ===== */
+.tool-rail{
+  padding:12px 8px; min-height:0;
+  display:flex; flex-direction:column;
+}
+.tool-title{text-align:center;font-size:11px;color:var(--muted);margin:2px 0 8px}
+.tools{flex:1;min-height:0;display:flex;flex-direction:column;gap:4px}
+.tool{
+  flex:1 1 0; min-height:0; max-height:68px; width:100%;
+  border:0;border-radius:16px;
+  background:transparent;color:var(--brown2);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;cursor:pointer;transition:.18s ease;
+}
+.tool svg{
+  width:26px;height:26px;flex:none;stroke:currentColor;fill:none;
+  stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;
+}
+.tool span{font-size:10px;line-height:1}
+.tool:hover:not(:disabled){background:var(--surface2);color:var(--brown)}
+.tool.active{background:var(--orange);color:var(--brown)}
+.tool:active:not(:disabled){transform:scale(.96)}
+.tool:disabled{opacity:.35;cursor:not-allowed}
+
+/* ===== Canvas : ขนาด = min(กว้างที่มี, สูงที่มี, 640) จึงเห็นภาพเต็มเสมอ ===== */
+.workspace{min-width:0;min-height:0;display:flex;flex-direction:column;align-items:center;gap:10px}
+.stage{flex:1;min-height:0;width:100%;container-type:size;display:grid;place-items:center}
+.canvas-shell{
+  position:relative; width:min(100cqw,100cqh,640px); aspect-ratio:1;
+  background:var(--surface);border-radius:28px;box-shadow:var(--shadow);overflow:hidden;
+}
+#canvas{width:100%;height:100%;display:block;background:#FFFDF9}
+.drop-overlay{
+  position:absolute;inset:14px;border:1.5px dashed var(--line);
+  border-radius:20px;display:grid;place-items:center;text-align:center;
+}
+.drop-content{padding:20px;max-width:360px}
+.upload-mark{
+  width:64px;height:64px;border-radius:22px;margin:0 auto 14px;
+  display:grid;place-items:center;background:#FFE1B6;color:var(--brown);
+}
+.upload-mark svg{width:34px;height:34px;fill:currentColor}
+.drop-content h2{margin:0;font-size:20px}
+.drop-content p{margin:8px 0 16px;font-size:13px;color:var(--muted)}
+.btn{
+  border:0;min-height:44px;border-radius:999px;padding:0 22px;
+  font-weight:700;cursor:pointer;transition:.18s ease;
+}
+.btn-primary{background:var(--orange);color:var(--brown)}
+.btn-primary:hover:not(:disabled){background:var(--orangeDark);color:white;transform:translateY(-1px)}
+.btn-primary:active:not(:disabled){transform:scale(.98);background:#D8792B}
+.btn-secondary{background:var(--surface2);color:var(--brown)}
+.btn-secondary:hover:not(:disabled){background:#F7E2C8}
+.btn:disabled{background:var(--disabled);color:var(--disabledText);cursor:not-allowed}
+.dragging .drop-overlay{background:rgba(242,166,90,.12);border-color:var(--orangeDark)}
+.dragging{outline:3px dashed var(--orangeDark);outline-offset:-3px}
+.loaded .drop-overlay{display:none}
+.preview-hint{
+  flex:none;border:0;background:rgba(92,58,33,.18);color:var(--brown);
+  padding:7px 14px;border-radius:999px;font-size:11px;cursor:pointer;
+  user-select:none;-webkit-user-select:none;touch-action:none;
+}
+.preview-hint:disabled{opacity:.35;cursor:not-allowed}
+.preview-hint.active{background:var(--brown);color:#FFF8ED}
+
+/* ===== Panel ===== */
+.panel{padding:18px;align-self:start;max-height:100%;overflow:auto}
+.panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.panel h3{margin:0;font-size:15px}
+.selected-tool{
+  font-size:11px;color:var(--brown2);background:var(--surface2);
+  padding:5px 9px;border-radius:999px;
+}
+.control-label{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:10px;font-size:12px;font-weight:700;
+}
+.value-pill{
+  min-width:46px;text-align:center;padding:5px 8px;border-radius:999px;
+  background:#FFE4BF;color:var(--brown);
+}
+input[type=range]{
+  width:100%;appearance:none;-webkit-appearance:none;height:5px;border-radius:999px;
+  background:linear-gradient(to right,var(--orangeDark) 0 50%,#DDD7D0 50% 100%);
+  outline:none;touch-action:none;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;
+  background:var(--brown);cursor:pointer;box-shadow:0 2px 8px rgba(92,58,33,.20);
+}
+input[type=range]::-moz-range-thumb{
+  width:22px;height:22px;border:0;border-radius:50%;background:var(--brown);cursor:pointer;
+}
+input[type=range]:disabled{opacity:.35}
+.scale-values{margin-top:6px;display:flex;justify-content:space-between;font-size:10px;color:var(--muted)}
+.divider{height:1px;background:#EEE2D4;margin:20px 0}
+.panel-actions{display:grid;gap:10px}
+.note{margin-top:18px;font-size:10px;line-height:1.55;color:var(--muted)}
+.project-name{margin:22px 0 0;padding-top:14px;border-top:1px solid #EEE2D4;font-size:11px;line-height:1.5;color:var(--muted);text-align:center}
+
+/* ===== Mobile : layout แบบ Meitu (หัว / ภาพ / slider / แถบ tools ล่าง) ไม่เลื่อนหน้า ===== */
+@media(max-width:820px){
+  body{padding:0}
+  .app{
+    display:flex;flex-direction:column;gap:8px;max-width:none;
+    padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));
+  }
+  .topbar{padding:0;flex:none}
+  .brand{display:none}
+  .top-logo{display:block;min-width:0}
+  .top-logo strong{display:block;font-size:12px;line-height:1.3;color:var(--brown2)}
+  .top-logo small{display:block;font-size:9px;color:var(--muted)}
+  .icon-btn{width:38px;height:38px}
+
+  .workspace{order:1;flex:1;gap:6px}
+  .topbar{order:0}
+  .panel{order:2}
+  .tool-rail{order:3}
+
+  .canvas-shell{border-radius:18px}
+  .drop-overlay{inset:10px}
+  .drop-content h2{font-size:17px}
+  .upload-mark{width:54px;height:54px;margin-bottom:10px}
+
+  .panel{
+    flex:none;padding:10px 12px;border-radius:20px;overflow:visible;
+    display:grid;grid-template-columns:auto 1fr auto;column-gap:10px;row-gap:10px;align-items:center;
+  }
+  .panel-head,.control-label{display:contents}
+  .panel h3,.control-label>span:first-child,.scale-values,.divider,.note,.project-name{display:none}
+  .selected-tool{grid-column:1;min-width:54px;text-align:center;padding:6px 10px;font-size:12px}
+  #scaleRange{grid-column:2}
+  .value-pill{grid-column:3;min-width:42px;padding:5px 6px}
+  .panel-actions{grid-column:1/-1;grid-template-columns:repeat(3,1fr);gap:8px}
+  .panel-actions .btn{min-height:38px;padding:0 6px;font-size:12.5px;white-space:nowrap}
+
+  .tool-rail{flex:none;padding:6px 4px;border-radius:20px}
+  .tool-title{display:none}
+  .tools{display:grid;grid-template-columns:repeat(9,1fr);gap:2px;flex:none}
+  .tool{height:54px;max-height:none;border-radius:12px;gap:4px}
+  .tool svg{width:23px;height:23px}
+  .tool span{font-size:9px}
+}
+</style>
+</head>
+
+<body>
+<main class="app">
+  <header class="topbar">
+    <div class="brand"><h1>Body Reshaping</h1></div>
+    <div class="top-logo"><strong>ไม่ยากถ้าอยากผอม</strong><small>Mai Yak Tha Yak Phom</small></div>
+    <div class="history">
+      <button id="undoBtn" class="icon-btn" aria-label="Undo" disabled>↶</button>
+      <button id="redoBtn" class="icon-btn" aria-label="Redo" disabled>↷</button>
+    </div>
+  </header>
+
+  <aside class="tool-rail">
+    <div class="tool-title">TOOLS</div>
+    <!-- ปุ่มเครื่องมือถูกสร้างจาก ICONS ใน <script> ด้านล่าง -->
+    <div class="tools" id="tools"></div>
+  </aside>
+
+  <section class="workspace">
+    <div class="stage">
+      <div class="canvas-shell" id="dropZone">
+        <canvas id="canvas" width="640" height="640"></canvas>
+        <div class="drop-overlay">
+          <div class="drop-content">
+            <div class="upload-mark">
+              <svg viewBox="0 0 24 24"><path d="M19.35 10.04A7.49 7.49 0 0 0 5.5 8.5 5.99 5.99 0 0 0 6 20h13a5 5 0 0 0 .35-9.96ZM13 13v4h-2v-4H8l4-4 4 4h-3Z"/></svg>
+            </div>
+            <h2>Drop Your Image Here</h2>
+            <p>ลากภาพมาวาง หรือเลือกรูปจากเครื่อง</p>
+            <button class="btn btn-primary" id="chooseBtn">Choose Image</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button id="previewBtn" class="preview-hint" disabled>Hold to preview original</button>
+  </section>
+
+  <aside class="panel">
+    <div class="panel-head">
+      <h3>Reshape</h3>
+      <span class="selected-tool" id="selectedTool">Brow</span>
+    </div>
+
+    <div class="control-label">
+      <span>Scale</span>
+      <span class="value-pill" id="scaleValue">0</span>
+    </div>
+
+    <input id="scaleRange" type="range" min="-50" max="50" value="0" disabled>
+    <div class="scale-values"><span>-50</span><span>0</span><span>50</span></div>
+
+    <div class="divider"></div>
+
+    <div class="panel-actions">
+      <button id="changeBtn" class="btn btn-secondary" disabled>Change Image</button>
+      <button id="resetBtn" class="btn btn-secondary" disabled>Reset</button>
+      <button id="downloadBtn" class="btn btn-primary" disabled>Download</button>
+    </div>
+
+    <p class="note">
+      เลือกบริเวณที่ต้องการปรับ แล้วเลื่อน Scale ไปทางขวาเพื่อบีบให้เล็กลง
+      หรือทางซ้ายเพื่อขยาย
+    </p>
+
+    <p class="project-name">ไม่ยากถ้าอยากผอม (Mai Yak Tha Yak Phom)</p>
+  </aside>
+
+  <input id="fileInput" type="file" accept="image/*" hidden>
+</main>
+
+<script>
+/* =====================================================================
+   ICONS  —  จุดเดียวที่ต้องแก้เมื่ออยากเปลี่ยนไอคอน / ชื่อปุ่ม / ลำดับปุ่ม
+   - key (brow, eye, ...) = ชื่อเครื่องมือที่ใช้ในโค้ด reshape
+   - label = ข้อความใต้ไอคอน
+   - viewBox = (ไม่ใส่ก็ได้) ขนาดกริดของไอคอน ค่าเริ่มต้น '0 0 32 32'
+   - svg   = เนื้อใน <svg> ใช้ currentColor เพื่อให้สีตามธีมอัตโนมัติ
+     (ไอคอนทึบใส่ fill="currentColor" stroke="none", ไอคอนเส้นใส่ stroke="currentColor")
+   ลำดับในรายการนี้ = ลำดับปุ่มบนหน้าจอ
+   ===================================================================== */
+const ICONS = {
+  brow: {
+    label: 'Brow',
+    svg: `<path d="M4 17c1.5-4.500 6-7 11-5.500" stroke-width="3.2"/><path d="M17 11.500c5-1.500 9.500 1 11 5.500" stroke-width="3.2"/>`
+  },
+  eye: {
+    label: 'Eye',
+    svg: `<path d="M2.500 16c3.500-5.500 8-8.500 13.500-8.500S26 10.500 29.500 16c-3.500 5.500-8 8.500-13.500 8.500S6 21.500 2.500 16Z"/><circle cx="16" cy="16" r="4.200"/><circle cx="16" cy="16" r="1.200" fill="currentColor" stroke="none"/>`
+  },
+  nose: {
+    label: 'Nose',
+    svg: `<path d="M13.500 5c0 6-1 10-4 13.500-2 2.500-.5 5.500 2.500 5.500 1.500 0 2.500-1 4-1s2.500 1 4 1c3 0 4.500-3 2.500-5.500-3-3.500-4-7.500-4-13.500"/><circle cx="12.500" cy="21.500" r="1.100" fill="currentColor" stroke="none"/><circle cx="19.500" cy="21.500" r="1.100" fill="currentColor" stroke="none"/>`
+  },
+  mouth: {
+    label: 'Mouth',
+    svg: `<path d="M3.500 16c4-.8 6.500-4.500 9-4.500 1.500 0 2.200.9 3.500.9s2-.9 3.500-.9c2.500 0 5 3.700 9 4.500-3 6-7.500 8.500-12.500 8.500S6.500 22 3.500 16Z"/><path d="M3.500 16c4 1.500 8.500 2 12.500 2s8.500-.5 12.500-2"/>`
+  },
+  chest: {
+    label: 'Chest',
+    viewBox: '0 0 16 7',
+    svg: `<path d="M3.25 0.621714C5.22297 0.800965 7.66582 1.04221 7.60941 2.96753C7.66582 1.04221 11.7717 0.279127 12.7499 0.25M7.25 4.98321C6.47 6.05354 5.31 6.59273 3.75 6.59273C1.42 6.59273 0.25 5.14416 0.25 4.17845C0.25 3.53464 0.64 2.72987 1.42 1.76416C2.50957 1.76457 3.5847 1.96482 4.5637 2.34969C5.54271 2.73456 6.39985 3.29393 7.07 3.9853L7.25 4.17845H8.25L8.43 3.9853C9.10016 3.29393 9.95729 2.73456 10.9363 2.34969C11.9153 1.96482 12.9904 1.76457 14.08 1.76416C14.86 2.72987 15.25 3.53464 15.25 4.17845C15.25 5.14416 14.08 6.59273 11.75 6.59273C10.28 6.59273 9.15 6.10987 8.38 5.14416L8.25 4.98321H7.25Z" fill="none" stroke="currentColor" stroke-width="0.5" stroke-linecap="round"/>`
+  },
+  waist: {
+    label: 'Waist',
+    viewBox: '2.500 3 19 19',
+    svg: `<path d="M20 20C20.0079 18.8328 19.7754 17.6764 19.317 16.603C18.814 15.416 18.128 14.467 17.6 13.513C17.14 12.684 16.8 11.852 16.8 10.857C16.8 7.75 18.4 4 18.4 4M17.6 13.513H6.39996M3.99996 20C3.99196 18.8328 4.22446 17.6764 4.68296 16.603C5.18596 15.416 5.87196 14.467 6.39996 13.513C6.85996 12.684 7.19995 11.852 7.19995 10.857C7.19995 7.75 5.59995 4 5.59995 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M4.68286 16.604C4.68286 16.604 10.3999 17.714 11.9999 20C13.5999 17.714 19.3169 16.604 19.3169 16.604" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`
+  },
+  butt: {
+    label: 'Butt',
+    svg: `<path d="M16 12.500c-2-3-5.500-3.500-8.500-2.500-3.500 1.500-4 6-2.500 10 1.500 4 5.500 6 11 6s9.500-2 11-6c1.500-4 1-8.500-2.500-10-3-1-6.500-.5-8.500 2.500Z"/><path d="M16 12.500c-1 3-1 6 0 9.500"/>`
+  },
+  arm: {
+    label: 'Arm',
+    viewBox: '1 3 22 22',
+    svg: `<path d="M2 13.5C2 13.3674 2.05268 13.2402 2.14645 13.1464C2.24021 13.0526 2.36739 13 2.5 13H8.2615C8.79296 12.9999 9.32241 13.0651 9.838 13.194L10.7695 13.427C11.5501 12.2212 12.708 11.308 14.0625 10.83L16 10.1465V9.45147C16.0001 8.88385 16.1934 8.33316 16.548 7.88997L18.1095 5.93747C18.1509 5.88575 18.2022 5.84278 18.2604 5.81106C18.3186 5.77934 18.3825 5.75951 18.4485 5.75272C18.5144 5.74592 18.581 5.75231 18.6445 5.77149C18.7079 5.79068 18.7669 5.82228 18.818 5.86447L19.0015 6.01547C19.1115 6.10647 19.206 6.21047 19.2835 6.32297L19.4985 6.02647C19.6155 5.86562 19.7633 5.72964 19.9333 5.62644C20.1033 5.52324 20.2921 5.45488 20.4888 5.42534C20.6855 5.39579 20.8861 5.40565 21.0789 5.45434C21.2717 5.50304 21.4529 5.58959 21.612 5.70897L21.8 5.84997C21.8718 5.90377 21.9277 5.97588 21.962 6.05875C21.9963 6.14162 22.0077 6.23219 21.995 6.32097L21.495 9.82097C21.4845 9.89459 21.4576 9.96492 21.4164 10.0269C21.3753 10.0888 21.3208 10.1408 21.257 10.179L18.8475 11.6245L16.9325 14.3375C16.2083 15.3634 15.2024 16.1576 14.0365 16.624L13.281 16.926L12.9395 17.268C12.7073 17.5001 12.4317 17.6842 12.1283 17.8098C11.825 17.9354 11.4998 18 11.1715 18H10.5815L8.5815 18.6665C7.91887 18.8873 7.22497 18.9999 6.5265 19H2.5C2.36739 19 2.24021 18.9473 2.14645 18.8535C2.05268 18.7598 2 18.6326 2 18.5V18H6.5265C7.1175 18 7.7045 17.905 8.2655 17.718L10.342 17.0255C10.393 17.0087 10.4463 17.0003 10.5 17.0005H11.1715C11.3686 17.0004 11.5637 16.9615 11.7458 16.886C11.9278 16.8106 12.0932 16.6999 12.2325 16.5605L12.6465 16.1465C12.6948 16.0981 12.7508 16.0613 12.8145 16.036L13.665 15.6955C14.6518 15.3008 15.5031 14.6287 16.116 13.7605L18.0915 10.9615C18.1317 10.9048 18.1833 10.8571 18.243 10.8215L20.5385 9.44347L20.9625 6.47647C20.8555 6.41448 20.7294 6.39434 20.6084 6.41991C20.4874 6.44549 20.3802 6.51498 20.3075 6.61497L18.9045 8.54397C18.8659 8.59709 18.8172 8.64208 18.7612 8.67639C18.7052 8.71069 18.643 8.73362 18.5781 8.74388C18.5133 8.75414 18.447 8.75153 18.3832 8.73619C18.3193 8.72085 18.2591 8.69308 18.206 8.65447C18.1529 8.61586 18.1079 8.56717 18.0736 8.51117C18.0393 8.45517 18.0163 8.39297 18.0061 8.3281C17.9958 8.26324 17.9984 8.19699 18.0138 8.13314C18.0291 8.06929 18.0569 8.00909 18.0955 7.95597L18.4515 7.46697C18.4977 7.4035 18.5282 7.33005 18.5407 7.25256C18.5533 7.17508 18.5473 7.09574 18.5235 7.02097L17.3285 8.51447C17.1158 8.78045 17 9.1109 17 9.45147V10.5C17 10.6034 16.9679 10.7043 16.9082 10.7887C16.8485 10.8732 16.764 10.937 16.6665 10.9715L14.3955 11.773C13.2211 12.1875 12.2221 12.9883 11.562 14.0445L11.424 14.265C11.368 14.3545 11.2851 14.424 11.1872 14.4635C11.0893 14.503 10.9814 14.5105 10.879 14.485L9.5955 14.164C9.15921 14.055 8.7112 13.9999 8.2615 14H2V13.5Z" fill="currentColor" stroke="none"/>`
+  },
+  leg: {
+    label: 'Leg',
+    svg: `<path d="M8 4c-1 7 0 12 1.500 16 1 3 .5 5.500.5 8h3.500"/><path d="M16 7c0 6-1.500 10-2.500 13-.7 2.500-.3 5.500-.3 8"/><path d="M24 4c1 7 0 12-1.500 16-1 3-.5 5.500-.5 8h-3.500"/><path d="M16 7c0 6 1.500 10 2.500 13 .7 2.500.3 5.500.3 8"/><path d="M8 4h16"/>`
+  }
+};
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const fileInput = document.getElementById('fileInput');
+const chooseBtn = document.getElementById('chooseBtn');
+const changeBtn = document.getElementById('changeBtn');
+const dropZone = document.getElementById('dropZone');
+const scaleRange = document.getElementById('scaleRange');
+const scaleValue = document.getElementById('scaleValue');
+const selectedTool = document.getElementById('selectedTool');
+const downloadBtn = document.getElementById('downloadBtn');
+const resetBtn = document.getElementById('resetBtn');
+const previewBtn = document.getElementById('previewBtn');
+const undoBtn = document.getElementById('undoBtn');
+const redoBtn = document.getElementById('redoBtn');
+const toolsEl = document.getElementById('tools');
+
+let sourceImage = null;
+let originalFrame = null;
+let activeTool = Object.keys(ICONS)[0];
+
+const reshapeState = {};
+Object.keys(ICONS).forEach(key => reshapeState[key] = 0);
+
+/* สร้างปุ่มเครื่องมือจาก ICONS */
+Object.entries(ICONS).forEach(([key, item], i) => {
+  const btn = document.createElement('button');
+  btn.className = 'tool' + (i === 0 ? ' active' : '');
+  btn.dataset.tool = key;
+  btn.dataset.label = item.label;
+  btn.disabled = true;
+  btn.innerHTML = `<svg viewBox="${item.viewBox || '0 0 32 32'}">${item.svg}</svg><span>${item.label}</span>`;
+  toolsEl.appendChild(btn);
+});
+const toolButtons = [...document.querySelectorAll('.tool')];
+selectedTool.textContent = ICONS[activeTool].label;
+
+function setEditorEnabled(enabled){
+  toolButtons.forEach(btn => btn.disabled = !enabled);
+  scaleRange.disabled = !enabled;
+  downloadBtn.disabled = !enabled;
+  resetBtn.disabled = !enabled;
+  changeBtn.disabled = !enabled;
+  previewBtn.disabled = !enabled;
+}
+
+function updateRangeFill(){
+  const min = Number(scaleRange.min);
+  const max = Number(scaleRange.max);
+  const value = Number(scaleRange.value);
+  const percent = ((value-min)/(max-min))*100;
+  scaleRange.style.background =
+    `linear-gradient(to right,
+      var(--orangeDark) 0%,
+      var(--orangeDark) ${percent}%,
+      #DDD7D0 ${percent}%,
+      #DDD7D0 100%)`;
+}
+
+function drawImageCover(img){
+  const cw = canvas.width;
+  const ch = canvas.height;
+  const scale = Math.max(cw/img.width, ch/img.height);
+  const w = img.width * scale;
+  const h = img.height * scale;
+  const x = (cw-w)/2;
+  const y = (ch-h)/2;
+
+  ctx.clearRect(0,0,cw,ch);
+  ctx.drawImage(img,x,y,w,h);
+  originalFrame = ctx.getImageData(0,0,cw,ch);
+}
+
+function resetControls(){
+  Object.keys(reshapeState).forEach(key => reshapeState[key] = 0);
+  scaleRange.value = 0;
+  scaleValue.textContent = '0';
+  updateRangeFill();
+}
+
+/* โหลดรูป — ใช้ทั้งตอนเลือกรูปครั้งแรก และตอนเปลี่ยนรูป */
+function loadFile(file){
+  if(!file || !file.type.startsWith('image/')) return;
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      sourceImage = img;
+      drawImageCover(img);
+      dropZone.classList.add('loaded');
+      setEditorEnabled(true);
+      resetControls();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+chooseBtn.addEventListener('click', () => fileInput.click());
+changeBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => {
+  loadFile(e.target.files[0]);
+  fileInput.value = '';   // เลือกไฟล์เดิมซ้ำได้
+});
+
+['dragenter','dragover'].forEach(type => {
+  dropZone.addEventListener(type, e => {
+    e.preventDefault();
+    dropZone.classList.add('dragging');
+  });
+});
+['dragleave','drop'].forEach(type => {
+  dropZone.addEventListener(type, e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragging');
+  });
+});
+/* ลากรูปใหม่มาวางทับบนภาพก็เปลี่ยนรูปได้ */
+dropZone.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+
+toolButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    toolButtons.forEach(item => item.classList.remove('active'));
+    btn.classList.add('active');
+
+    activeTool = btn.dataset.tool;
+    selectedTool.textContent = btn.dataset.label;
+
+    scaleRange.value = reshapeState[activeTool] ?? 0;
+    scaleValue.textContent = scaleRange.value > 0 ? `+${scaleRange.value}` : scaleRange.value;
+    updateRangeFill();
+  });
+});
+
+scaleRange.addEventListener('input', () => {
+  const value = Number(scaleRange.value);
+  scaleValue.textContent = value > 0 ? `+${value}` : value;
+  reshapeState[activeTool] = value;
+  updateRangeFill();
+
+  /*
+    จุดเชื่อมกับ mask/reshape จริง:
+    applyReshape({
+      canvas,
+      sourceImage,
+      part: activeTool,   // brow | eye | nose | mouth | chest | waist | butt | arm | leg
+      amount: value
+    });
+  */
+});
+
+resetBtn.addEventListener('click', () => {
+  if(!sourceImage) return;
+  resetControls();
+  drawImageCover(sourceImage);
+});
+
+function showOriginal(){
+  if(!originalFrame) return;
+  ctx.putImageData(originalFrame,0,0);
+  previewBtn.classList.add('active');
+  previewBtn.textContent = 'Original';
+}
+
+function stopPreview(){
+  previewBtn.classList.remove('active');
+  previewBtn.textContent = 'Hold to preview original';
+  // หลังต่อ reshape engine ให้ redraw ภาพที่แก้แล้วตรงนี้
+}
+
+previewBtn.addEventListener('pointerdown', showOriginal);
+previewBtn.addEventListener('pointerup', stopPreview);
+previewBtn.addEventListener('pointerleave', stopPreview);
+previewBtn.addEventListener('pointercancel', stopPreview);
+
+canvas.addEventListener('contextmenu', e => {
+  e.preventDefault();
+  showOriginal();
+  setTimeout(stopPreview,700);
+});
+
+downloadBtn.addEventListener('click', () => {
+  if(!sourceImage) return;
+  const link = document.createElement('a');
+  link.download = 'body-reshape-640x640.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+});
+
+undoBtn.addEventListener('click', () => {});
+redoBtn.addEventListener('click', () => {});
+
+setEditorEnabled(false);
+updateRangeFill();
+</script>
+</body>
+</html>
