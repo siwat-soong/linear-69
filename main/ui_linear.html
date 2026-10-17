@@ -196,6 +196,39 @@ button,input{font:inherit}
 .note{margin-top:18px;font-size:10px;line-height:1.55;color:var(--muted)}
 .project-name{margin:22px 0 0;padding-top:14px;border-top:1px solid #EEE2D4;font-size:11px;line-height:1.5;color:var(--muted);text-align:center}
 
+/* ===== Loading Overlay ===== */
+.loading-overlay {
+  position: absolute; inset: 0;
+  background: rgba(255, 249, 241, 0.85);
+  backdrop-filter: blur(5px);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 14px;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.22s ease;
+  z-index: 20;
+  border-radius: 28px;
+}
+.loading-overlay.active {
+  opacity: 1; pointer-events: all;
+}
+.spinner {
+  width: 42px; height: 42px;
+  border: 4px solid var(--surface2);
+  border-top-color: var(--orange);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.loading-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brown);
+  letter-spacing: -0.01em;
+}
+
 @media(max-width:820px){
   body{padding:0}
   .app{
@@ -273,6 +306,10 @@ button,input{font:inherit}
     <div class="stage">
       <div class="canvas-shell" id="dropZone">
         <canvas id="canvas" width="640" height="640"></canvas>
+        <div class="loading-overlay" id="loadingOverlay">
+          <div class="spinner"></div>
+          <span class="loading-text" id="loadingText">กำลังประมวลผล...</span>
+        </div>
         <div class="drop-overlay">
           <div class="drop-content">
             <div class="upload-mark">
@@ -382,12 +419,16 @@ const chooseBtn = document.getElementById('chooseBtn');
 const changeBtn = document.getElementById('changeBtn');
 const dropZone = document.getElementById('dropZone');
 
-// Element ปุ่มกด Step
+// Elements ปุ่มกด Step
 const btnDec5 = document.getElementById('btnDec5');
 const btnDec1 = document.getElementById('btnDec1');
 const btnInc1 = document.getElementById('btnInc1');
 const btnInc5 = document.getElementById('btnInc5');
 const scaleValue = document.getElementById('scaleValue');
+
+// Elements Loading
+const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingText = document.getElementById('loadingText');
 
 const selectedTool = document.getElementById('selectedTool');
 const downloadBtn = document.getElementById('downloadBtn');
@@ -397,23 +438,172 @@ const undoBtn = document.getElementById('undoBtn');
 const redoBtn = document.getElementById('redoBtn');
 const toolsEl = document.getElementById('tools');
 
-let sourceImage = null;       // เก็บ HTMLImageElement รูปปัจจุบัน
-let originalFrame = null;     // เก็บ ImageData รูปต้นฉบับไว้พรีวิว
+let sourceImage = null;
+let originalFrame = null;
+let tempFrameBeforePreview = null;
 let activeTool = Object.keys(ICONS)[0];
-let activeAbortController = null; // ช่วยยกเลิก API call เก่า
+let activeAbortController = null;
 
 let api_domain = 'http://127.0.0.1:8000';
 let baseImageBlob = null;
+let originalImageBlob = null;
 
 const MIN_SCALE = -50;
 const MAX_SCALE = 50;
-const STEP = 5;
 let isProcessing = false;
+
+// ===== Undo / Redo State Management =====
+let historyStack = [];
+let redoStack = [];
+const MAX_HISTORY = 20;
 
 const reshapeState = {};
 Object.keys(ICONS).forEach(key => reshapeState[key] = 0);
 
-/* สร้างปุ่มเครื่องมือจาก ICONS */
+/* =====================================================================
+   1. Wrapper สำหรับ API Fetch + Status Check & Timeout
+   ===================================================================== */
+async function fetchWithStatusCheck(url, options = {}, timeoutMs = 20000) {
+  const timeoutController = new AbortController();
+  const id = setTimeout(() => timeoutController.abort(), timeoutMs);
+
+  let combinedSignal = timeoutController.signal;
+  if (options.signal) {
+    if (typeof AbortSignal.any === 'function') {
+      combinedSignal = AbortSignal.any([options.signal, timeoutController.signal]);
+    } else {
+      options.signal.addEventListener('abort', () => timeoutController.abort());
+    }
+  }
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: combinedSignal
+    });
+
+    clearTimeout(id);
+
+    if (!response.ok) {
+      let errorMessage = `เกิดข้อผิดพลาดจากเซิร์ฟเวอร์ (Status: ${response.status})`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) {
+          errorMessage = typeof errorData.detail === 'string'
+            ? errorData.detail
+            : JSON.stringify(errorData.detail);
+        }
+      } catch (e) {}
+      throw new Error(errorMessage);
+    }
+
+    return response;
+
+  } catch (err) {
+    clearTimeout(id);
+    if (err.name === 'AbortError') {
+      throw new Error('การเชื่อมต่อหมดเวลา (Request Timeout) หรือถูกยกเลิก');
+    }
+    throw err;
+  }
+}
+
+/* =====================================================================
+   2. UI Loading Overlay
+   ===================================================================== */
+function showLoading(msg = 'กำลังประมวลผล...'){
+  loadingText.textContent = msg;
+  loadingOverlay.classList.add('active');
+}
+
+function hideLoading(){
+  loadingOverlay.classList.remove('active');
+}
+
+/* =====================================================================
+   3. ระบบ Undo / Redo Logic (แก้ไขปรับปรุงให้เสถียร 100%)
+   ===================================================================== */
+function updateUndoRedoButtons() {
+  // ปุ่ม Undo จะเปิดทันทีเมื่อประวัติมีตั้งแต่ 2 ขั้นขึ้นไป (รูปตั้งต้น + รูปที่แก้)
+  undoBtn.disabled = historyStack.length <= 1 || isProcessing;
+  redoBtn.disabled = redoStack.length === 0 || isProcessing;
+}
+
+function pushHistoryState(force = false) {
+  if (!sourceImage) return;
+
+  const currentState = {
+    imageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
+    reshapeState: JSON.parse(JSON.stringify(reshapeState)),
+    baseImageBlob: baseImageBlob,
+    activeTool: activeTool
+  };
+
+  // 💡 เช็กว่าทั้งระดับ Scale และ Active Tool ตรงกับก้าวก่อนหน้าหรือไม่
+  if (!force && historyStack.length > 0) {
+    const lastState = historyStack[historyStack.length - 1];
+    const isSameScale = JSON.stringify(lastState.reshapeState) === JSON.stringify(currentState.reshapeState);
+    const isSameTool = lastState.activeTool === currentState.activeTool;
+    
+    // ถ้ารายละเอียดเหมือนเดิมทั้งหมด ค่อยข้ามการบันทึกซ้ำ
+    if (isSameScale && isSameTool) {
+      updateUndoRedoButtons();
+      return;
+    }
+  }
+
+  historyStack.push(currentState);
+  if (historyStack.length > MAX_HISTORY) {
+    historyStack.shift();
+  }
+
+  redoStack = [];
+  updateUndoRedoButtons();
+}
+
+function applyState(state) {
+  if (!state) return;
+
+  ctx.putImageData(state.imageData, 0, 0);
+
+  Object.assign(reshapeState, state.reshapeState);
+  baseImageBlob = state.baseImageBlob;
+
+  if (state.activeTool && state.activeTool !== activeTool) {
+    const targetBtn = toolButtons.find(b => b.dataset.tool === state.activeTool);
+    if (targetBtn && !targetBtn.disabled) {
+      toolButtons.forEach(item => item.classList.remove('active'));
+      targetBtn.classList.add('active');
+      activeTool = state.activeTool;
+      selectedTool.textContent = targetBtn.dataset.label;
+    }
+  }
+
+  updateStepButtons();
+  updateUndoRedoButtons();
+}
+
+function undo() {
+  if (historyStack.length <= 1 || isProcessing) return;
+
+  const current = historyStack.pop();
+  redoStack.push(current);
+
+  const previousState = historyStack[historyStack.length - 1];
+  applyState(previousState);
+}
+
+function redo() {
+  if (redoStack.length === 0 || isProcessing) return;
+
+  const nextState = redoStack.pop();
+  historyStack.push(nextState);
+  applyState(nextState);
+}
+
+/* =====================================================================
+   4. เครื่องมือ UI และ Canvas Helpers
+   ===================================================================== */
 Object.entries(ICONS).forEach(([key, item], i) => {
   const btn = document.createElement('button');
   btn.className = 'tool' + (i === 0 ? ' active' : '');
@@ -432,11 +622,16 @@ function setEditorEnabled(enabled){
   changeBtn.disabled = !enabled;
   previewBtn.disabled = !enabled;
   if(!enabled){
-    btnDecrease.disabled = true;
-    btnIncrease.disabled = true;
+    btnDec5.disabled = true;
+    btnDec1.disabled = true;
+    btnInc1.disabled = true;
+    btnInc5.disabled = true;
     toolButtons.forEach(btn => btn.disabled = true);
+    undoBtn.disabled = true;
+    redoBtn.disabled = true;
   } else {
     updateStepButtons();
+    updateUndoRedoButtons();
   }
 }
 
@@ -445,14 +640,12 @@ function updateStepButtons(){
   scaleValue.textContent = val > 0 ? `+${val}` : `${val}`;
   const enabled = sourceImage !== null;
 
-  // ปิดปุ่มหากกำลังประมวลผล (isProcessing) หรือค่าจะเกินลิมิต [-50, 50]
   btnDec5.disabled = !enabled || isProcessing || (val - 5 < MIN_SCALE);
   btnDec1.disabled = !enabled || isProcessing || (val - 1 < MIN_SCALE);
   btnInc1.disabled = !enabled || isProcessing || (val + 1 > MAX_SCALE);
   btnInc5.disabled = !enabled || isProcessing || (val + 5 > MAX_SCALE);
 }
 
-/* วาด Image หรือ ImageBitmap ลง Canvas */
 function drawImageToCanvas(img){
   const maxDim = 640;
   let w = img.width;
@@ -477,7 +670,6 @@ function drawImageToCanvas(img){
   ctx.drawImage(img, 0, 0, w, h);
 }
 
-/* บันทึกรูปภาพปัจจุบันบน Canvas เก็บเป็น originalFrame สำหรับพรีวิว */
 function saveCurrentFrameAsOriginal(){
   originalFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
 }
@@ -487,51 +679,59 @@ function resetControls(){
   updateStepButtons();
 }
 
-/* แปลง Canvas ให้เป็น Blob (File) สำหรับส่งขึ้น API */
 function getCanvasBlob(){
   return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 }
 
 /* =====================================================================
-   อัปโหลดรูปภาพ -> เรียก api/reshape_matrix เพื่อ clean ข้อมูล
+   5. อัปโหลดรูปภาพ -> เรียก api/reshape_matrix
    ===================================================================== */
 async function loadFile(file){
   if(!file || !file.type.startsWith('image/')) return;
+
+  showLoading('กำลังวิเคราะห์และจัดขนาดรูปภาพ...');
 
   try {
     const formData = new FormData();
     formData.append('image', file);
 
-    const res = await fetch(`${api_domain}/reshape_matrix`, {
+    const res = await fetchWithStatusCheck(`${api_domain}/reshape_matrix`, {
       method: 'POST',
       body: formData
-    });
-
-    if(!res.ok) throw new Error('Reshape matrix clean failed');
+    }, 15000);
 
     const blob = await res.blob();
     const imageBitmap = await createImageBitmap(blob);
-    
+
     sourceImage = imageBitmap;
     drawImageToCanvas(imageBitmap);
-    saveCurrentFrameAsOriginal(); // บันทึกไว้เป็น Original Preview
+    saveCurrentFrameAsOriginal();
 
     baseImageBlob = await getCanvasBlob();
-    
+    originalImageBlob = baseImageBlob;
+
     dropZone.classList.add('loaded');
     setEditorEnabled(true);
     resetControls();
 
+    // 💡 บันทึกรูปภาพแรกสุดเข้า historyStack ทันทีเพื่อให้เป็น Initial State 0
+    historyStack = [];
+    redoStack = [];
+    pushHistoryState(true);
+
+    showLoading('กำลังตรวจสอบอวัยวะในภาพ...');
     await validateBodyParts();
 
   } catch(err) {
     console.error('Error in loadFile:', err);
-    alert('เกิดข้อผิดพลาดในการ Clean ข้อมูลรูปภาพ');
+    alert(`❌ ${err.message}`);
+  } finally {
+    hideLoading();
   }
 }
 
 /* =====================================================================
-   เรียก api/validate เช็กอวัยวะที่ปรับได้ แล้วเปิด/ปิดปุ่ม
+   6. เรียก api/validate
    ===================================================================== */
 async function validateBodyParts(){
   try {
@@ -539,17 +739,15 @@ async function validateBodyParts(){
     const formData = new FormData();
     formData.append('image', currentBlob);
 
-    const res = await fetch(`${api_domain}/validate`, {
+    const res = await fetchWithStatusCheck(`${api_domain}/validate`, {
       method: 'POST',
       body: formData
-    });
+    }, 15000);
 
-    if(!res.ok) throw new Error('Validate failed');
+    const data = await res.json();
 
-    const data = await res.json(); 
-
-    const validParts = Array.isArray(data) 
-      ? data 
+    const validParts = Array.isArray(data)
+      ? data
       : Object.keys(data).filter(k => data[k]);
 
     toolButtons.forEach(btn => {
@@ -559,7 +757,12 @@ async function validateBodyParts(){
 
     if(toolButtons.find(b => b.dataset.tool === activeTool)?.disabled){
       const firstAvailable = toolButtons.find(b => !b.disabled);
-      if(firstAvailable) firstAvailable.click();
+      if(firstAvailable) {
+        activeTool = firstAvailable.dataset.tool;
+        selectedTool.textContent = firstAvailable.dataset.label;
+        toolButtons.forEach(item => item.classList.remove('active'));
+        firstAvailable.classList.add('active');
+      }
     }
 
   } catch(err) {
@@ -567,17 +770,19 @@ async function validateBodyParts(){
   }
 }
 
+/* =====================================================================
+   7. Pre-cache Mask
+   ===================================================================== */
 async function prepareMask(toolName) {
   try {
     const blobToSend = baseImageBlob || await getCanvasBlob();
     const formData = new FormData();
     formData.append('image', blobToSend);
 
-    // ยิงไปที่ /<toolName>/mask ตามชื่ออวัยวะ เช่น /eye/mask, /nose/mask, /brow/mask
-    const res = await fetch(`${api_domain}/${toolName}/mask`, {
+    const res = await fetchWithStatusCheck(`${api_domain}/${toolName}/mask`, {
       method: 'POST',
       body: formData
-    });
+    }, 15000);
 
     if (res.ok) {
       console.log(`${toolName} mask prepared in backend cache.`);
@@ -588,7 +793,7 @@ async function prepareMask(toolName) {
 }
 
 /* =====================================================================
-   เรียกใช้ API ของแต่ละอวัยวะพร้อมส่งค่า scale
+   8. เรียกใช้ API ปรับแต่งอวัยวะ (Reshape Adjust)
    ===================================================================== */
 async function callReshapeApi(toolName, scaleAmount){
   if(activeAbortController){
@@ -598,6 +803,8 @@ async function callReshapeApi(toolName, scaleAmount){
 
   isProcessing = true;
   updateStepButtons();
+  updateUndoRedoButtons();
+  showLoading(`กำลังปรับโครงสร้าง ${ICONS[toolName]?.label || toolName}...`);
 
   try {
     const blobToSend = baseImageBlob || await getCanvasBlob();
@@ -605,31 +812,35 @@ async function callReshapeApi(toolName, scaleAmount){
     formData.append('image', blobToSend);
     formData.append('scale', scaleAmount);
 
-    const res = await fetch(`${api_domain}/${toolName}`, {
+    const res = await fetchWithStatusCheck(`${api_domain}/${toolName}`, {
       method: 'POST',
       body: formData,
       signal: activeAbortController.signal
-    });
-
-    if(!res.ok) throw new Error(`API for ${toolName} failed`);
+    }, 20000);
 
     const resultBlob = await res.blob();
     const updatedImage = await createImageBitmap(resultBlob);
 
     drawImageToCanvas(updatedImage);
 
+    // 💡 บันทึก State ใหม่ลง History หลังจากการยิง API สำเร็จ
+    pushHistoryState();
+
   } catch(err) {
     if(err.name !== 'AbortError'){
       console.error(`Error calling api/${toolName}:`, err);
+      alert(`⚠️ ${err.message}`);
     }
   } finally {
     isProcessing = false;
     updateStepButtons();
+    updateUndoRedoButtons();
+    hideLoading();
   }
 }
 
 /* =====================================================================
-   ฟังก์ชันปรับค่าสเต็ปเมื่อกดปุ่ม (-) หรือ (+)
+   9. ฟังก์ชันปรับค่าสเต็ป (- / +)
    ===================================================================== */
 async function changeStep(delta){
   if(isProcessing || !activeTool || !sourceImage) return;
@@ -643,8 +854,9 @@ async function changeStep(delta){
   await callReshapeApi(activeTool, newVal);
 }
 
-/* ===== Event Listeners ===== */
-
+/* =====================================================================
+   10. Event Listeners
+   ===================================================================== */
 btnDec5.addEventListener('click', () => changeStep(-5));
 btnDec1.addEventListener('click', () => changeStep(-1));
 btnInc1.addEventListener('click', () => changeStep(1));
@@ -681,32 +893,59 @@ toolButtons.forEach(btn => {
     selectedTool.textContent = btn.dataset.label;
 
     updateStepButtons();
-    saveCurrentFrameAsOriginal();
 
     baseImageBlob = await getCanvasBlob();
 
-    // ถ้ากดเลือกปุ่มดวงตา ให้สั่งทำ Mask ล่วงหน้า
-    await prepareMask(activeTool);
+    // 💡 บันทึก State การสลับเครื่องมืออวัยวะใหม่ลงใน History ทันที
+    pushHistoryState();
 
-    await callReshapeApi(activeTool, reshapeState[activeTool] ?? 0);
+    showLoading(`กำลังเตรียมพื้นที่สำหรับ ${btn.dataset.label}...`);
+
+    try {
+      await prepareMask(activeTool);
+
+      if ((reshapeState[activeTool] ?? 0) !== 0) {
+        await callReshapeApi(activeTool, reshapeState[activeTool]);
+      }
+    } catch (err) {
+      console.error(`Error switching to ${activeTool}:`, err);
+    } finally {
+      hideLoading();
+    }
   });
 });
 
-resetBtn.addEventListener('click', () => {
+resetBtn.addEventListener('click', async () => {
   if(!sourceImage) return;
   resetControls();
   drawImageToCanvas(sourceImage);
-  saveCurrentFrameAsOriginal();
+  baseImageBlob = originalImageBlob || await getCanvasBlob();
+  pushHistoryState();
 });
 
+/* Hold to Show Original Logic */
 function showOriginal(){
-  if(!originalFrame) return;
-  ctx.putImageData(originalFrame,0,0);
+  if(!sourceImage) return;
+  tempFrameBeforePreview = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  if (originalFrame) {
+    ctx.putImageData(originalFrame, 0, 0);
+  } else {
+    drawImageToCanvas(sourceImage);
+  }
+
   previewBtn.classList.add('active');
   previewBtn.textContent = 'Original';
 }
 
 function stopPreview(){
+  if (!previewBtn.classList.contains('active')) return;
+
+  if (tempFrameBeforePreview) {
+    ctx.putImageData(tempFrameBeforePreview, 0, 0);
+    tempFrameBeforePreview = null;
+  }
+
   previewBtn.classList.remove('active');
   previewBtn.textContent = 'Hold to preview original';
 }
@@ -719,7 +958,7 @@ previewBtn.addEventListener('pointercancel', stopPreview);
 canvas.addEventListener('contextmenu', e => {
   e.preventDefault();
   showOriginal();
-  setTimeout(stopPreview,700);
+  setTimeout(stopPreview, 700);
 });
 
 downloadBtn.addEventListener('click', () => {
@@ -730,8 +969,9 @@ downloadBtn.addEventListener('click', () => {
   link.click();
 });
 
-undoBtn.addEventListener('click', () => {});
-redoBtn.addEventListener('click', () => {});
+// เชื่อมปุ่ม Undo / Redo
+undoBtn.addEventListener('click', undo);
+redoBtn.addEventListener('click', redo);
 
 setEditorEnabled(false);
 </script>

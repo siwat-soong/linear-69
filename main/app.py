@@ -261,7 +261,7 @@ async def cheek_adjust_endpoint(image: UploadFile = File(...), scale: float = Fo
             else:
                 raise ValueError("ยังไม่ได้ทำ Mask หรือหาแก้มไม่พบ")
 
-        alpha = float(scale) / 100.0
+        alpha = float(scale) / -100.0
         result_matrix = cheek_adjust(matrix, V_warp, alpha=alpha)
 
         success, encoded_img = cv2.imencode('.png', result_matrix)
@@ -432,7 +432,7 @@ async def handle_torso_adjust(image: UploadFile, scale: float, part_name: str, m
         else:
             raise HTTPException(status_code=400, detail=f"ไม่พบข้อมูล Mask ({part_name})")
 
-    result_matrix = adjust_fn(matrix, body_cache_data, scale_val=scale)
+    result_matrix = adjust_fn(matrix, body_cache_data, scale_val=-scale)
     success, encoded_img = cv2.imencode('.png', result_matrix)
     return Response(content=encoded_img.tobytes(), media_type="image/png")
 
@@ -512,7 +512,7 @@ async def arm_adjust_endpoint(image: UploadFile = File(...), scale: float = Form
             else:
                 raise ValueError("ยังไม่ได้ทำ Mask หรือหาแขนไม่พบ")
 
-        result_matrix = arm_adjust(matrix, arm_cache_data, scale_val=scale)
+        result_matrix = arm_adjust(matrix, arm_cache_data, scale_val=-scale)
 
         success, encoded_img = cv2.imencode('.png', result_matrix)
         if not success:
@@ -573,7 +573,7 @@ async def leg_adjust_endpoint(image: UploadFile = File(...), scale: float = Form
             else:
                 raise ValueError("ยังไม่ได้ทำ Mask หรือหาขาไม่พบ")
 
-        result_matrix = leg_adjust(matrix, leg_cache_data, scale_val=scale)
+        result_matrix = leg_adjust(matrix, leg_cache_data, scale_val=-scale)
 
         success, encoded_img = cv2.imencode('.png', result_matrix)
         if not success:
