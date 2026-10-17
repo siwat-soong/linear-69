@@ -47,6 +47,7 @@ from utils.mask.mask_nose import validate_nose, create_nose_mask, nose_adjust
 from utils.mask.chest import validate_chest, create_chest_mask, chest_adjust
 from utils.mask.waist import validate_waist, create_waist_mask, waist_adjust
 from utils.mask.hips import validate_hips, create_hips_mask, hips_adjust
+from utils.mask.arm_for_ui import validate_arm, create_arm_mask, arm_adjust
 
 WARP_CACHE = {}
 
@@ -63,7 +64,8 @@ VALIDATORS = {
     "cheek": validate_cheek,
     "chest": validate_chest,
     "waist": validate_waist,
-    "hips": validate_hips
+    "hips": validate_hips,
+    "arm": validate_arm
 }
 
 # =====================================================================
@@ -458,6 +460,67 @@ async def hips_mask_endpoint(image: UploadFile = File(...)):
 @app.post("/hips")
 async def hips_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
     return await handle_torso_adjust(image, scale, "hips", create_hips_mask, hips_adjust)
+
+@app.post("/arm/mask")
+async def arm_mask_endpoint(image: UploadFile = File(...)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_arm"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        M_arm_display, arm_cache_data = create_arm_mask(matrix)
+
+        if arm_cache_data is None:
+            raise ValueError("ไม่พบแขนในภาพเพื่อทำ Mask")
+
+        WARP_CACHE[cache_key] = arm_cache_data
+
+        success, encoded_mask = cv2.imencode('.png', M_arm_display)
+        if not success:
+            raise ValueError("Failed to encode mask image")
+
+        return Response(content=encoded_mask.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /arm/mask: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/arm")
+async def arm_adjust_endpoint(image: UploadFile = File(...), scale: float = Form(0.0)):
+    try:
+        contents = await image.read()
+        img_hash = get_image_hash(contents)
+        cache_key = f"{img_hash}_arm"
+
+        nparr = np.frombuffer(contents, np.uint8)
+        matrix = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if matrix is None:
+            raise ValueError("ไม่สามารถอ่านข้อมูลรูปภาพได้")
+
+        if cache_key in WARP_CACHE:
+            arm_cache_data = WARP_CACHE[cache_key]
+        else:
+            _, arm_cache_data = create_arm_mask(matrix)
+            if arm_cache_data is not None:
+                WARP_CACHE[cache_key] = arm_cache_data
+            else:
+                raise ValueError("ยังไม่ได้ทำ Mask หรือหาแขนไม่พบ")
+
+        result_matrix = arm_adjust(matrix, arm_cache_data, scale_val=scale)
+
+        success, encoded_img = cv2.imencode('.png', result_matrix)
+        if not success:
+            raise ValueError("Failed to encode image")
+
+        return Response(content=encoded_img.tobytes(), media_type="image/png")
+
+    except Exception as e:
+        print(f"Error in /arm: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
