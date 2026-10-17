@@ -59,12 +59,10 @@ def get_image_hash(image_bytes: bytes) -> str:
 
 @app.get("/")
 async def serve_ui():
-    return FileResponse("ui_linear.html")
-
-# 💡 2. เปิดให้เข้าถึงไฟล์ Static Assets เพิ่มเติม (ถ้ามี)
-if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-
+    html_path = os.path.join(os.path.dirname(__file__), "ui_linear.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    return {"error": f"File not found at {html_path}"}
 
 # Dictionary สำหรับรวบรวมฟังก์ชัน Validate
 VALIDATORS = {
