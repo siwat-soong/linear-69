@@ -486,11 +486,7 @@ async function validateBodyParts(){
     if(!res.ok) throw new Error('Validate failed');
 
     const data = await res.json(); 
-    /*
-      คาดหวังรูปแบบ Response ได้ 2 แบบ:
-      1. Array เช่น: ["brow", "eye", "waist"]
-      2. Object เช่น: { brow: true, eye: true, nose: false }
-    */
+    
     const validParts = Array.isArray(data) 
       ? data 
       : Object.keys(data).filter(k => data[k]);

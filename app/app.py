@@ -37,6 +37,29 @@ async def reshape_matrix(image: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Image processing failed: {str(e)}")
 
 
+from utils.mask.mask_eye import validate_eye
+VALIDATORS = {
+    "eye": validate_eye,
+}
+
+@app.post("/validate")
+async def validate(image: UploadFile = File(...)):
+    try:
+        contents = await image.read()
+        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+        matrix = np.array(pil_image)
+
+        valid_parts = []
+
+        for key, validator_fn in VALIDATORS.items():
+            is_valid = validator_fn(matrix)
+            if is_valid:
+                valid_parts.append(key)
+
+        return valid_parts
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Validation failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
