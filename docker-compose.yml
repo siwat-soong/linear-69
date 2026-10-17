@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  body-reshape-app:
+    build: .
+    container_name: body_reshape_container
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

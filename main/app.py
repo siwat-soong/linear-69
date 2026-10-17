@@ -1,11 +1,13 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware  # 1. Import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 import io
 import numpy as np
 import hashlib
 import cv2
+import os
 
 app = FastAPI()
 
@@ -54,6 +56,14 @@ WARP_CACHE = {}
 
 def get_image_hash(image_bytes: bytes) -> str:
     return hashlib.md5(image_bytes).hexdigest()
+
+@app.get("/")
+async def serve_ui():
+    return FileResponse("ui_linear.html")
+
+# 💡 2. เปิดให้เข้าถึงไฟล์ Static Assets เพิ่มเติม (ถ้ามี)
+if os.path.exists("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # Dictionary สำหรับรวบรวมฟังก์ชัน Validate

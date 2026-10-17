@@ -444,7 +444,7 @@ let tempFrameBeforePreview = null;
 let activeTool = Object.keys(ICONS)[0];
 let activeAbortController = null;
 
-let api_domain = 'http://127.0.0.1:8000';
+let api_domain = window.location.origin;
 let baseImageBlob = null;
 let originalImageBlob = null;
 
